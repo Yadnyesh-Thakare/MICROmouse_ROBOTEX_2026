@@ -132,49 +132,23 @@ int readSensors(int &leftDist_mm, int &centerDist_mm, int &rightDist_mm)
   sensorCenter.rangingTest(&mCenter, false);
   sensorRight.rangingTest(&mRight,   false);
 
-  // Cap out-of-range readings to safe defaults
+  //* Cap out-of-range readings to safe defaults
   leftDist_mm   = (mLeft.RangeStatus   != 4) ? mLeft.RangeMilliMeter   : 200;
   centerDist_mm = (mCenter.RangeStatus != 4) ? mCenter.RangeMilliMeter : 800;
   rightDist_mm  = (mRight.RangeStatus  != 4) ? mRight.RangeMilliMeter  : 200;
 
-  bool leftClear  = (leftDist_mm > WallLostThreshold);   // Using your 250mm threshold for left wall loss detection
-  bool frontClear = (centerDist_mm > obstacleThreshold); // Using your 55mm threshold for front obstacle detection
-  bool rightClear = (rightDist_mm > WallLostThreshold);  // Using your 250mm threshold for right wall loss detection 
-
-  //* ==========================================
-  //* CLEARANCE COMBINATIONS
-  //* ==========================================
+  //* Compress 7 conditional cases into a single 3-bit integer lookup table map
+  //* Bit 2: Left, Bit 1: Front, Bit 0: Right 
+  int mask = ((leftDist_mm   > WallLostThreshold)  << 2) |
+             ((centerDist_mm > obstacleThreshold)  << 1) | 
+             ((rightDist_mm  > WallLostThreshold)  << 0);
   
-  // Case 1: ONLY left is clear (Front and Right wall present)
-  if (leftClear && !frontClear && !rightClear) {
-    return 1;
-  }
-  // Case 2: ONLY Front is clear (Right and left wall present)
-  if (!leftClear && frontClear && !rightClear) {
-    return 2;
-  }
-  // Case 3: ONLY Right is clear (Front and left wall present)
-  if (!leftClear && !frontClear && rightClear) {
-    return 3;
-  }
-  // Case 4: ONLY Front and Left are clear (Right wall present)
-  if (leftClear && frontClear && !rightClear) {
-    return 4;
-  }
-  // Case 5: ONLY Front and Right are clear (Left wall present)
-  if (!leftClear && frontClear && rightClear) {
-    return 5;
-  }
-  // Case 6: ONLY Left and Right are clear (Front wall present)
-  if (leftClear && !frontClear && rightClear) {
-    return 6;
-  }
-  // Case 7: No way left (Front, Left, and Right walls present)
-  if (!leftClear && !frontClear && !rightClear) {
-    return 7;
-  }
-  // Default fallback if a configuration doesn't match your 7 cases
-  return 0; 
+             //? | bit wise or 
+  //* Map the mask result to your original 1-7 case numbers
+  //*              Mask:  0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110, 0b111
+  const int caseMap[8] = {    7,     3,     2,     5,     1,     6,     4,     0 };
+
+  return caseMap[mask];
 }
 
 
