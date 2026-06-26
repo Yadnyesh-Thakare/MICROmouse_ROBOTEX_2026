@@ -3,7 +3,6 @@
 #include <PINS.h> // For the defined pins 
 #include <SparkFun_TB6612.h> // For the motor driver
 #include <Adafruit_VL53L0X.h> // For the distance sensor
-#include <VL53L0X.h> // For the distance sensor by pololu
 
 
 //? ===========================================================================================//
@@ -34,13 +33,9 @@ float Kp_wall = 0.9;
 float Ki_wall = 0.0;
 float Kd_wall = 0.2;
 
-int   targetSideDistance    = 95;    // mm from left wall
+int   targetSideDistance    = 100;    // mm from left wall
 int   obstacleThreshold     = 55;    // mm — front stop distance
-<<<<<<< HEAD
-int   WallLostThreshold     = 250;   // mm — left & right wall reference lost (opening/end of wall)
-=======
 int   WallLostThreshold     = 125;   // mm — left wall reference lost (opening/end of wall)
->>>>>>> b7f42193a22676420105727562606d4f0a60fac0
 int   wallLostTurnSpeed     = 200;   // outer-wheel PWM for the re-acquire arc turn
 int   baseSpeed = 250;               //* Base forward speed (0-255)
 float previousWallError = 0;
@@ -73,7 +68,7 @@ Adafruit_VL53L0X sensorLeft   = Adafruit_VL53L0X();
 Adafruit_VL53L0X sensorRight  = Adafruit_VL53L0X();
 
 // Global sensor distance variables (in mm)
-int leftDist_mm   ;
+int leftDist_mm   ;  
 int centerDist_mm ;
 int rightDist_mm  ;
 
@@ -304,5 +299,59 @@ void loop()
     readSensors();
     int check = wallCase();  //*-- Read the distance sensors and get the clearance case
 
+    // Grab the current running time in milliseconds
+  unsigned long currentMillis = millis();
 
+  // Handle standard 500ms blinking state tracking automatically
+  if (currentMillis - lastBlinkTime >= 500) {
+    lastBlinkTime = currentMillis;
+    ledState = !ledState; // Toggle state between true/false every 500ms
+  }
+
+  // Handle fast 100ms blinking state tracking for Case 7 (All Blocked)
+  bool fastLedState = ((currentMillis / 100) % 2 == 0);
+
+  // 3. Evaluate your states without pausing the system
+  switch (check) 
+  {
+    case 1: // Only left is clear -> Solid Left
+      digitalWrite(LEDL, HIGH);
+      digitalWrite(LEDR, LOW);
+      break;
+
+    case 2: // Only front is clear -> Both Blink together (500ms)
+      digitalWrite(LEDL, ledState ? HIGH : LOW);
+      digitalWrite(LEDR, ledState ? HIGH : LOW);
+      break;
+
+    case 3: // Only right is clear -> Solid Right
+      digitalWrite(LEDL, LOW);
+      digitalWrite(LEDR, HIGH);
+      break;
+
+    case 4: // Front and left are clear -> Left Solid, Right Blinks
+      digitalWrite(LEDL, HIGH);
+      digitalWrite(LEDR, ledState ? HIGH : LOW);
+      break;
+
+    case 5: // Front and right are clear -> Right Solid, Left Blinks
+      digitalWrite(LEDL, ledState ? HIGH : LOW);
+      digitalWrite(LEDR, HIGH);
+      break;
+
+    case 6: // Left and right are clear -> Alternating Blinking
+      digitalWrite(LEDL, ledState ? HIGH : LOW);
+      digitalWrite(LEDR, ledState ? LOW : HIGH); // Inverse of Left
+      break;
+
+    case 7: // No way out -> Rapid Blinking (100ms)
+      digitalWrite(LEDL, fastLedState ? HIGH : LOW);
+      digitalWrite(LEDR, fastLedState ? HIGH : LOW);
+      break;
+
+    default:
+      digitalWrite(LEDL, LOW);
+      digitalWrite(LEDR, LOW);
+      break;
+  }
 }
