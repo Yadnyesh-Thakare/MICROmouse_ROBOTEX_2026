@@ -12,9 +12,9 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "C:/Users/mayan/OneDrive/Documents/GitHub/MICROmouse_ROBOTEX_2026/.pio/build/esp32doit-devkit-v1/firmware.elf",
+            "executable": "C:/Users/Lenon/Documents/PlatformIO/Projects/MICROmouse_2026_YAD/.pio/build/esp32doit-devkit-v1/firmware.elf",
             "projectEnvName": "esp32doit-devkit-v1",
-            "toolchainBinDir": "C:/Users/mayan/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "toolchainBinDir": "C:/Users/Lenon/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
@@ -25,18 +25,18 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "C:/Users/mayan/OneDrive/Documents/GitHub/MICROmouse_ROBOTEX_2026/.pio/build/esp32doit-devkit-v1/firmware.elf",
+            "executable": "C:/Users/Lenon/Documents/PlatformIO/Projects/MICROmouse_2026_YAD/.pio/build/esp32doit-devkit-v1/firmware.elf",
             "projectEnvName": "esp32doit-devkit-v1",
-            "toolchainBinDir": "C:/Users/mayan/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "toolchainBinDir": "C:/Users/Lenon/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "C:/Users/mayan/OneDrive/Documents/GitHub/MICROmouse_ROBOTEX_2026/.pio/build/esp32doit-devkit-v1/firmware.elf",
+            "executable": "C:/Users/Lenon/Documents/PlatformIO/Projects/MICROmouse_2026_YAD/.pio/build/esp32doit-devkit-v1/firmware.elf",
             "projectEnvName": "esp32doit-devkit-v1",
-            "toolchainBinDir": "C:/Users/mayan/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "toolchainBinDir": "C:/Users/Lenon/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }

@@ -36,11 +36,7 @@ float Kd_wall = 0.2;
 
 int   targetSideDistance    = 95;    // mm from left wall
 int   obstacleThreshold     = 55;    // mm — front stop distance
-<<<<<<< HEAD
-int   WallLostThreshold     = 250;   // mm — left & right wall reference lost (opening/end of wall)
-=======
-int   WallLostThreshold     = 125;   // mm — left wall reference lost (opening/end of wall)
->>>>>>> b7f42193a22676420105727562606d4f0a60fac0
+int   WallLostThreshold     = 125;   // mm — left & right wall reference lost (opening/end of wall)
 int   wallLostTurnSpeed     = 200;   // outer-wheel PWM for the re-acquire arc turn
 int   baseSpeed = 250;               //* Base forward speed (0-255)
 float previousWallError = 0;
