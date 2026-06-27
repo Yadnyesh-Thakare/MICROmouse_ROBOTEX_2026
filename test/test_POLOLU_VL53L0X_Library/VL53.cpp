@@ -15,8 +15,10 @@
 #define ADDRESS_LEFT   0x31
 #define ADDRESS_RIGHT  0x32
 
-const int WallLostThreshold = 125;
-const int obstacleThreshold  = 95;
+const int WallLostThreshold_U = 130;
+const int WallLostThreshold_L = 120;
+const int FrontobstacleThreshold  = 250;
+const int FrontStopThreshold = 85;
 
 int leftDist_mm = 1000, centerDist_mm = 1000, rightDist_mm = 1000;
 volatile long leftEncoderCount = 0, rightEncoderCount = 0;
@@ -44,7 +46,8 @@ void initSensors() {
   initIndiv(sensorRight,  XSHUT_RIGHT,  ADDRESS_RIGHT);
 }
 
-void readSensors() {
+void readSensors() 
+{
   uint16_t l = sensorLeft.readRangeContinuousMillimeters();
   uint16_t c = sensorCenter.readRangeContinuousMillimeters();
   uint16_t r = sensorRight.readRangeContinuousMillimeters();
@@ -54,11 +57,33 @@ void readSensors() {
   rightDist_mm  = (r > 2000 || sensorRight.timeoutOccurred())  ? 1000 : r;
 }
 
-int wallCase() {
-  int mask = ((leftDist_mm > WallLostThreshold) << 2) | ((centerDist_mm > obstacleThreshold) << 1) | (rightDist_mm > WallLostThreshold);
-  const int caseMap[8] = { 7, 3, 2, 5, 1, 6, 4, 0 };
-  return caseMap[mask];
+
+int WallCase() 
+{
+  static bool leftWallVisible = true;
+  static bool centerObstacleVisible = true; 
+  static bool rightWallVisible = true;
+
+    // Left Hysteresis
+    if (leftDist_mm > WallLostThreshold_U)      leftWallVisible = false;
+    else if (leftDist_mm < WallLostThreshold_L) leftWallVisible = true;
+
+    // Center Hysteresis (Example)
+    if (centerDist_mm > FrontobstacleThreshold) centerObstacleVisible = false;
+    else centerObstacleVisible = true;
+
+    // Right Hysteresis
+    if (rightDist_mm > WallLostThreshold_U)      rightWallVisible = false;
+    else if (rightDist_mm < WallLostThreshold_L) rightWallVisible = true;
+
+    // 3. Generate mask using the state variables
+    // We treat "Visible" as 0 (Wall present) and "Not Visible" as 1 (Wall lost)
+    int mask = ((!leftWallVisible) << 2) | ((!centerObstacleVisible) << 1) | (!rightWallVisible);
+    
+    const int caseMap[8] = { 7, 3, 2, 5, 1, 6, 4, 0 };    
+    return caseMap[mask];
 }
+
 
 void setup() {
   Serial.begin(115200);
@@ -77,19 +102,9 @@ void setup() {
 void loop() {
   // Grab fresh background cache data instantly
   readSensors();
-  int currentCase = wallCase();
+  int currentCase = WallCase();
 
-  // Print telemetry updates every 100 milliseconds
-  static unsigned long lastPrintTime = 0;
-  unsigned long currentMillis = millis();
-
-  
-  if (currentMillis - lastPrintTime >= 100) { 
-    lastPrintTime = currentMillis;
-    Serial.printf("L_Enc: %ld | R_Enc: %ld || Dist L:%d C:%d R:%d -> CASE: %d\n", 
+  Serial.printf("L_Enc: %ld | R_Enc: %ld || Dist L:%d C:%d R:%d -> CASE: %d\n", 
                   leftEncoderCount, rightEncoderCount, leftDist_mm, centerDist_mm, rightDist_mm, currentCase);
-  }
-
-  // Small delay to let the core process OS level background tasks cleanly
-  delay(1); 
+ 
 }

@@ -118,7 +118,7 @@ void driveUntilWall(int baseSpeed)
         break;
     }
 
-    // 3. Wall Alignment PID Calculation
+    // 3. Wall Alignment PID Calculation  
     bool leftWallLost  = (leftDist_mm  >= WallLostThreshold);
     bool rightWallLost = (rightDist_mm >= WallLostThreshold);
     float wallError    = 0.0f;
@@ -181,8 +181,8 @@ void setup() {
 }
 
 void loop() {
-  // Drive forward at speed 180 until it hits a front wall
-  driveUntilWall(180); 
+  // Drive forward at speed 200 until it hits a front wall
+  driveUntilWall(200); 
 
   Serial.println("Run stopped. Pausing for 5 seconds.");
   delay(5000);
