@@ -34,11 +34,14 @@ float Kp_wall = 0.9;
 float Ki_wall = 0.0;
 float Kd_wall = 0.2;
 
-int   targetSideDistance    = 95;    // mm from left wall
-int   obstacleThreshold     = 55;    // mm — front stop distance
-int   WallLostThreshold     = 125;   // mm — left & right wall reference lost (opening/end of wall)
-int   wallLostTurnSpeed     = 200;   // outer-wheel PWM for the re-acquire arc turn
-int   baseSpeed = 250;               //* Base forward speed (0-255)
+const int WallLostThreshold_U = 135;        // upper threshold for side wall
+const int WallLostThreshold_L = 125;        // lower threshold for side wall 
+const int FrontobstacleThreshold_U  = 265;  // front wall detection 
+const int FrontobstacleThreshold_L = 150;
+const int SidewallThreshold = 125;          // Side wall distance for pid 
+const int FrontStopThreshold = 85;          // Front wall detection threshold for stoping 
+const int wallLostTurnSpeed     = 200;      // outer-wheel PWM for the re-acquire arc turn
+const int baseSpeed = 220;                  //* Base forward speed (0-255)
 float previousWallError = 0;
 float wallIntegral      = 0;
 
@@ -122,26 +125,36 @@ void readSensors()
   centerDist_mm = (mCenter.RangeStatus != 4) ? mCenter.RangeMilliMeter : 800;
   rightDist_mm  = (mRight.RangeStatus  != 4) ? mRight.RangeMilliMeter  : 200;
 
-  Serial.print("Left: ");   Serial.print(leftDist_mm);   Serial.print(" mm, ");
-  Serial.print("Center: "); Serial.print(centerDist_mm); Serial.print(" mm, "); 
-  Serial.print("Right: ");  Serial.print(rightDist_mm);  Serial.println(" mm");
 }
 
-int wallCase()
+int WallCase() 
 {
-  //* Compress 7 conditional cases into a single 3-bit integer lookup table map
-  //* Bit 2: Left, Bit 1: Front, Bit 0: Right  
-  int mask = ((leftDist_mm   > WallLostThreshold)  << 2) |
-             ((centerDist_mm > obstacleThreshold)  << 1) | 
-             ((rightDist_mm  > WallLostThreshold)  << 0);
+  static bool leftWallVisible = true;
+  static bool centerObstacleVisible = true; 
+  static bool rightWallVisible = true;
+
+    // Left Hysteresis
+    if (leftDist_mm > WallLostThreshold_U)      leftWallVisible = false;
+    else if (leftDist_mm < WallLostThreshold_L) leftWallVisible = true;
+
+    // Center Hysteresis 
+    if (centerDist_mm > FrontobstacleThreshold_U) centerObstacleVisible = false;
+    else centerObstacleVisible = true;
+
+    // Right Hysteresis
+    if (rightDist_mm > WallLostThreshold_U)      rightWallVisible = false;
+    else if (rightDist_mm < WallLostThreshold_L) rightWallVisible = true;
             //! from line no. 36 - 39
             //! | bit wise or 
-            // Using your 250mm threshold for left wall loss detection
-            // Using your 55mm threshold for front obstacle detection
-            // Using your 250mm threshold for right wall loss detection
+            // Using your 130-120 mm threshold for left wall loss detection
+            // Using your 250 mm threshold for front obstacle detection
+            // Using your 130-120 mm threshold for right wall loss detection
+  
+  int mask = ((!leftWallVisible) << 2) | ((!centerObstacleVisible) << 1) | (!rightWallVisible);
   //? Map the mask result to your original 1-7 case numbers
-  //?              Mask:  0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110, 0b111
-  const int caseMap[8] = {    7,     3,     2,     5,     1,     6,     4,     0 };
+  //?              Mask:  0b111, 0b011, 0b010, 0b101, 0b001, 0b110, 0b010, 0b000
+    const int caseMap[8] = { 7  ,  3  ,   2  ,   5  ,   1  ,   6  ,   4  ,   0  };    
+    return caseMap[mask];
 
   //* ==========================================
   //* CLEARANCE COMBINATIONS
@@ -156,7 +169,7 @@ int wallCase()
   // Case 7: No way left (Front, Left, and Right walls present)
   // case 0: Default fallback if a configuration doesn't match your 7 cases
 
-  return caseMap[mask];
+
 }
 
 //? ===========================================================================================//
@@ -239,6 +252,8 @@ void updateYAW()
 //! ===========================================================================================//
 
 
+
+
 void setup()
 {
     Serial.begin(115200); 
@@ -298,7 +313,8 @@ void loop()
     //? ======================================
    
     readSensors();
-    int check = wallCase();  //*-- Read the distance sensors and get the clearance case
+    int check = WallCase();  //*-- Read the distance sensors and get the clearance case
 
-
+    Serial.print("Wall Case: ");
+    Serial.println(check);
 }
