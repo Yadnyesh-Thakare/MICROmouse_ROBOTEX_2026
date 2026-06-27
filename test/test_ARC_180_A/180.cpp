@@ -66,7 +66,7 @@ int   obstacleThreshold     = 55;    // mm — front stop distance
 int   leftWallLostThreshold = 250;   // mm — left wall reference lost (opening/end of wall)
 int   wallLostTurnSpeed     = 150;   // outer-wheel PWM for the re-acquire arc turn
 
-float previousWallError = 0;
+float previousWallError  = 0;
 float wallIntegral       = 0;
 
 // Sync-correction gain used while decelerating, to keep both wheels
