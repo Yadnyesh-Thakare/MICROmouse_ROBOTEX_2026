@@ -4,6 +4,8 @@
 #include <SparkFun_TB6612.h> // For the motor driver
 #include <Adafruit_VL53L0X.h> // For the distance sensor
 #include <VL53L0X.h> // For the distance sensor by pololu
+#include <iostream> 
+#include <ESP32Encoder.h>
 
 
 //? ===========================================================================================//
@@ -23,6 +25,7 @@ const float ENCODER_CPR        = 2800.0;
 const float WHEEL_DIAMETER_MM  = 50.0;
 const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER_MM;  // ~141.37 mm
 const float WHEELBASE_MM       = 100.0;   // center-to-center wheel distance
+const float COUNTS_PER_MM = ENCODER_CPR / WHEEL_CIRCUMFERENCE;
 
 // volatile long leftEncoderCount  = 0;
 // volatile long rightEncoderCount = 0;
@@ -42,9 +45,12 @@ const int targetWallDistance = 95;          // Side wall distance for pid
 const int FrontStopThreshold = 85;          // Front wall detection threshold for stoping 
 const int wallLostTurnSpeed  = 200;         // outer-wheel PWM for the re-acquire arc turn
 const int baseSpeed = 220;                  //* Base forward speed (0-255)
+const int minSpeed = 60;
+const float rampDistance_mm = 80.0;
+
 
 float previousWallError = 0;
-float wallIntegral      = 0;
+float wallIntegral      = 0; 
 
 // Sync-correction gain used while decelerating, to keep both wheels
 // slowing down at the same actual rate (measured via encoders)
@@ -263,41 +269,100 @@ void updateYAW()
 
 //? ===========================================================================================//
 
-void driveDistance(float targetDistance_mm, int speed) {
-  // Calculate total ticks required
-  long targetTicks = (long)((targetDistance_mm / WHEEL_CIRCUMFERENCE) * ENCODER_CPR);
+void setMotorSpeeds(int leftSpeed, int rightSpeed) 
+{
+  motorLeft.drive(leftSpeed);
+  motorRight.drive(rightSpeed);
+}
+
+//? ===========================================================================================//
+
+void drive_ForwardExact(float distance_mm, int targetSpeed) 
+{
+  long targetCounts = distance_mm * COUNTS_PER_MM;
   
-  // Reset encoders
-  leftEncoderCount = 0;
-  rightEncoderCount = 0;
+  // Encoders are reset for relative distance tracking
+  leftEncoderCount.clearCount();
+  rightEncoderCount.clearCount();
+  // Notice: yaw is NOT cleared here. It remains absolute.
 
-  // P-Controller Constant (Adjust this based on your robot's weight/friction)
-  const float Kp = 1.2; 
+  setMotorSpeeds(targetSpeed, targetSpeed);
 
-  // Continue loop until target distance is met
   while (true) {
-    long currentLeft = abs(leftEncoderCount);
-    long currentRight = abs(rightEncoderCount);
-    long averageTicks = (currentLeft + currentRight) / 2;
+    // Keep tracking orientation while moving!
+    updateYAW();
+
+    long currentLeft = abs(leftEncoderCount.getCount());
+    long currentRight = abs(rightEncoderCount.getCount());
+
+    long avgCounts = (currentLeft + currentRight) / 2;
+    float currentDist_mm = avgCounts / COUNTS_PER_MM;
+
+    if (currentDist_mm >= distance_mm) {
+      break; 
+    }
+
+    int currentSpeed = targetSpeed;
+
+    if (currentDist_mm < rampDistance_mm) {
+      currentSpeed = map(currentDist_mm, 0, rampDistance_mm, minSpeed, targetSpeed);
+    }
+    else if (currentDist_mm > (distance_mm - rampDistance_mm)) {
+      float distanceRemaining = distance_mm - currentDist_mm;
+      currentSpeed = map(distanceRemaining, 0, rampDistance_mm, minSpeed, targetSpeed);
+    }
+
+    // Both motors get the exact same speed. Yaw is NOT being used to correct.
+    setMotorSpeeds(currentSpeed, currentSpeed); 
     
-    if (averageTicks >= targetTicks) break;
-
-    // --- Straight-Line Correction ---
-    // Error is difference between encoders. 
-    // Positive error means Left is ahead, so we slow Left/speed up Right.
-    long error = currentLeft - currentRight;
-    int adjustment = (int)(error * Kp);
-
-    // Calculate motor speeds
-    int leftSpeed  = speed - adjustment;
-    int rightSpeed = speed + adjustment;
-
-    // Command motors (constrained to valid PWM range)
-    motorLeft.drive(constrain(leftSpeed, 0, 255));
-    motorRight.drive(constrain(rightSpeed, 0, 255));
+    delay(2); // Shortened delay to allow more frequent gyro updates
   }
+  motorLeft.brake();
+  motorRight.brake();
+}
 
-  // Stop motors immediately
+//? ===========================================================================================//
+
+void drive_BackExact(float distance_mm, int targetSpeed) 
+{
+  long targetCounts = distance_mm * COUNTS_PER_MM;
+  
+  // Encoders are reset for relative distance tracking
+  leftEncoderCount.clearCount();
+  rightEncoderCount.clearCount();
+  // Notice: yaw is NOT cleared here. It remains absolute.
+
+  setMotorSpeeds(targetSpeed, targetSpeed);
+
+  while (true) {
+    // Keep tracking orientation while moving!
+    updateYAW();
+
+    long currentLeft = abs(leftEncoderCount.getCount());
+    long currentRight = abs(rightEncoderCount.getCount());
+
+    long avgCounts = (currentLeft + currentRight) / 2;
+    float currentDist_mm = avgCounts / COUNTS_PER_MM;
+
+    if (currentDist_mm >= distance_mm) {
+      break; 
+    }
+
+    int currentSpeed = targetSpeed;
+
+    if (currentDist_mm < rampDistance_mm) {
+      currentSpeed = map(currentDist_mm, 0, rampDistance_mm, minSpeed, targetSpeed);
+    }
+    else if (currentDist_mm > (distance_mm - rampDistance_mm)) {
+      float distanceRemaining = distance_mm - currentDist_mm;
+      currentSpeed = map(distanceRemaining, 0, rampDistance_mm, minSpeed, targetSpeed);
+    }
+
+    // Both motors get the exact same speed. Yaw is NOT being used to correct.
+    setMotorSpeeds(-currentSpeed,-currentSpeed); 
+    
+    delay(2); // Shortened delay to allow more frequent gyro updates
+  }
   motorLeft.brake();
   motorRight.brake();
 }
@@ -342,10 +407,9 @@ void drive_Forward_2_Wall(int baseSpeed)
   resetWallPID();
   Serial.println("Driving forward until front wall is detected...");
 
-  while (true)
+  while ( true )
   {
     readSensors();
-
     // 3. Wall Alignment PID Calculation
     bool leftWallLost  = (leftDist_mm  >= WallLostThreshold_L);
     bool rightWallLost = (rightDist_mm >= WallLostThreshold_L);
@@ -436,8 +500,8 @@ void turnArc(float angleDeg, float turnRadius_mm, int maxOuterSpeed, bool turnLe
   //Serial.print("Speed ratio (inner/outer): "); Serial.println(speedRatio);
 
   noInterrupts();
-  leftEncoderCount  = 0;
-  rightEncoderCount = 0;
+  leftEncoderCount.clearCount();
+  rightEncoderCount.clearCount();
   interrupts();
 
   const int minOuterSpeed = 60;
@@ -448,15 +512,15 @@ void turnArc(float angleDeg, float turnRadius_mm, int maxOuterSpeed, bool turnLe
 
   while (true) {
     noInterrupts();
-    long currentLeft  = abs(leftEncoderCount);
-    long currentRight = abs(rightEncoderCount);
+    long currentLeft  = abs(leftEncoderCount.getCount());
+    long currentRight = abs(rightEncoderCount.getCount());
     interrupts();
 
     // Outer wheel is the progress reference (it travels the longer arc)
     long progressTicks = turnLeft ? currentRight : currentLeft;
     if (progressTicks >= outerTargetTicks) break;
 
-    // --- Trapezoidal speed profile for outer wheel ---
+    // --- Trapezoidal speed profile for outers wheel ---
     int outerSpeed;
     if (progressTicks < accelTicks) {
       outerSpeed = map(progressTicks, 0, accelTicks, minOuterSpeed, maxOuterSpeed);
@@ -490,8 +554,6 @@ void turnArc(float angleDeg, float turnRadius_mm, int maxOuterSpeed, bool turnLe
 
     delay(5);
   }
-
-  //driveDistance(200,180);
 
   motorLeft.brake();
   motorRight.brake();
@@ -582,15 +644,40 @@ void loop()
     //? ======================================
    
     readSensors();
-    int check = WallCase();  //*-- Read the distance sensors and get the clearance case 
+    Wallcase = WallCase();  //*-- Read the distance sensors and get the clearance case 
+    if (Wallcase == 2 )
     {
-      Serial.println("No valid wall configuration detected. Stopping.");
+      drive_Forward(baseSpeed);
+      delay(1000);
+    }
+    
+    else if (Wallcase == 3)
+    {
+      drive_ForwardExact(90,180);
+      turnArc90Right(50,wallLostTurnSpeed);
+      drive_ForwardExact(90,180);
+      delay(1000);
+    }
+    
+
+    else if (Wallcase == 1)
+    {
+      drive_ForwardExact(90,180);
+      turnArc90Left(50,wallLostTurnSpeed);
+      drive_ForwardExact(90,180);
+      delay(1000);
+    }
+    
+    else
+    {
       motorLeft.brake();
       motorRight.brake();
     }
     Serial.print("Wall Case: ");
-    Serial.println(check);
+    Serial.println(Wallcase);
 
-    turnArc90Left(50, 220);  //*  Call the Arc180Left function with the clearance case
-    delay(2000);
+    // turnArc90Left(50, 220);  //*  Call the Arc180Left function with the clearance case
+    // delay(1000);
+    // moveBackExact(90,baseSpeed-40); // (distance,speed) 
+    // delay(2000);
 }
