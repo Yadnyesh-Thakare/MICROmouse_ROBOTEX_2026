@@ -33,9 +33,9 @@ const float COUNTS_PER_MM = ENCODER_CPR / WHEEL_CIRCUMFERENCE;
 //* ==========================================
 //* WALL PID PARAMETERS  — tune as needed
 //* ==========================================
-float Kp_wall = 0.9;
+float Kp_wall = 0.5;
 float Ki_wall = 0.0;
-float Kd_wall = 0.2;
+float Kd_wall = 0.4;
 
 const int WallLostThreshold_U = 135;        // upper threshold for side wall
 const int WallLostThreshold_L = 125;        // lower threshold for side wall 
@@ -44,7 +44,7 @@ const int FrontobstacleThreshold_U  = 265;  // front wall detection
 const int targetWallDistance = 95;          // Side wall distance for pid 
 const int FrontStopThreshold = 85;          // Front wall detection threshold for stoping 
 const int wallLostTurnSpeed  = 200;         // outer-wheel PWM for the re-acquire arc turn
-const int baseSpeed = 220;                  //* Base forward speed (0-255)
+const int baseSpeed = 200;                  //* Base forward speed (0-255)
 const int minSpeed = 60;
 const float rampDistance_mm = 80.0;
 
@@ -58,24 +58,6 @@ float Kp_sync = 2.5;
 
 int Wallcase = 0;
 
-// //* ENCODER ISRs  (4x quadrature resolution)
-
-// void IRAM_ATTR leftEncoderAISR() 
-// {
-//   leftEncoderCount += (digitalRead(ENCL_A) == digitalRead(ENCL_B)) ? -1 : 1;
-// }
-// void IRAM_ATTR leftEncoderBISR() 
-// {
-//   leftEncoderCount += (digitalRead(ENCL_A) != digitalRead(ENCL_B)) ? -1 : 1;
-// }
-// void IRAM_ATTR rightEncoderAISR() 
-// {
-//   rightEncoderCount += (digitalRead(ENCR_A) == digitalRead(ENCR_B)) ? -1 : 1;
-// }
-// void IRAM_ATTR rightEncoderBISR() 
-// {
-//   rightEncoderCount += (digitalRead(ENCR_A) != digitalRead(ENCR_B)) ? -1 : 1;
-// }
 
 //* Initialize the ESP32Encoder objects
 
@@ -277,6 +259,31 @@ void setMotorSpeeds(int leftSpeed, int rightSpeed)
 
 //? ===========================================================================================//
 
+void SmoothBreak(int Current_speed)
+{
+// Active Momentum Termination Pulse
+  motorLeft.drive(-Current_speed);
+  motorRight.drive(-Current_speed);
+  delay(40); 
+ 
+  motorLeft.brake();
+  motorRight.brake();
+  resetWallPID();
+  delay(100); // Allow physical bounce to dissipate
+}
+
+//? ===========================================================================================//
+
+void Break()
+
+{
+  motorLeft.brake();
+  motorRight.brake();
+}
+
+//? ===========================================================================================//
+
+
 void drive_ForwardExact(float distance_mm, int targetSpeed) 
 {
   long targetCounts = distance_mm * COUNTS_PER_MM;
@@ -369,35 +376,54 @@ void drive_BackExact(float distance_mm, int targetSpeed)
 
 //? ===========================================================================================//
 
-void drive_Forward(int baseSpeed) 
+// Returns true if it somehow completes, false if interrupted by a new wall case
+void drive_Forward(int baseSpeed, int expectedCase)
 {
-    // 3. Wall Alignment PID Calculation
-    bool leftWallLost  = (leftDist_mm >= WallLostThreshold_L);
+  resetWallPID();
+  Serial.println("Driving forward using PID until wall case changes...");
+
+  while (true)
+  {
+    updateYAW();    // Keep tracking orientation
+    readSensors();  // Continuously update distance variables
+
+    // INSTANT STOP: If the robot detects a new case, abort immediately
+    if (WallCase() != expectedCase) {
+        Break(); 
+        return; 
+    }
+
+    // --- Wall Alignment PID Calculation ---
+    bool leftWallLost  = (leftDist_mm  >= WallLostThreshold_L);
     bool rightWallLost = (rightDist_mm >= WallLostThreshold_L);
     float wallError    = 0.0f;
 
-    // Determine error based on available walls
     if (!leftWallLost && !rightWallLost) {
-        wallError = (float)(leftDist_mm - rightDist_mm);
+      wallError = (float)(leftDist_mm - rightDist_mm);
     }  
     else if (!leftWallLost && rightWallLost) {
-        wallError = (float)(leftDist_mm - targetWallDistance) * 2.0f; 
+      wallError = (float)(leftDist_mm - targetWallDistance) * 2.0f; 
     } 
     else if (leftWallLost && !rightWallLost) {
-        wallError = (float)(targetWallDistance - rightDist_mm) * 2.0f;
+      wallError = (float)(targetWallDistance - rightDist_mm) * 2.0f;
     }
 
+    // Anti-windup clamping for the integral term
     wallIntegral += wallError;
+    wallIntegral = constrain(wallIntegral, -1000.0f, 1000.0f); 
+
     float wallDerivative = wallError - previousWallError;
     float wallCorrection = (Kp_wall * wallError) + (Ki_wall * wallIntegral) + (Kd_wall * wallDerivative);
     previousWallError    = wallError;
 
-    // Apply motor speeds
     int leftSpeed  = baseSpeed - (int)wallCorrection;
     int rightSpeed = baseSpeed + (int)wallCorrection;
 
     motorLeft.drive(constrain(leftSpeed, 0, 255));
     motorRight.drive(constrain(rightSpeed, 0, 255));
+    
+    delay(1);
+  }
 }
 //? ===========================================================================================//
 
@@ -439,29 +465,6 @@ void drive_Forward_2_Wall(int baseSpeed)
   }
 }
  
-//? ===========================================================================================//
-
-void SmoothBreak(int Current_speed)
-{
-// Active Momentum Termination Pulse
-  motorLeft.drive(-Current_speed);
-  motorRight.drive(-Current_speed);
-  delay(40); 
- 
-  motorLeft.brake();
-  motorRight.brake();
-  resetWallPID();
-  delay(100); // Allow physical bounce to dissipate
-}
-
-//? ===========================================================================================//
-
-void Break()
-
-{
-  motorLeft.brake();
-  motorRight.brake();
-}
 
 //? ===========================================================================================//
 
@@ -636,48 +639,40 @@ bool ledState = false;
 //! ===========================================================================================//
 
 void loop() 
-  {
-    //? ======================================
-
-    updateYAW();     //!-- Update the yaw angle
-
-    //? ======================================
-   
+{
+    updateYAW(); 
     readSensors();
-    Wallcase = WallCase();  //*-- Read the distance sensors and get the clearance case 
-    if (Wallcase == 2 )
-    {
-      drive_Forward(baseSpeed);
-      delay(1000);
-    }
+    Wallcase = WallCase(); 
     
-    else if (Wallcase == 3)
-    {
-      drive_ForwardExact(90,180);
-      turnArc90Right(50,wallLostTurnSpeed);
-      drive_ForwardExact(90,180);
-      delay(1000);
-    }
-    
-
-    else if (Wallcase == 1)
-    {
-      drive_ForwardExact(90,180);
-      turnArc90Left(50,wallLostTurnSpeed);
-      drive_ForwardExact(90,180);
-      delay(1000);
-    }
-    
-    else
-    {
-      motorLeft.brake();
-      motorRight.brake();
-    }
     Serial.print("Wall Case: ");
     Serial.println(Wallcase);
 
-    // turnArc90Left(50, 220);  //*  Call the Arc180Left function with the clearance case
-    // delay(1000);
-    // moveBackExact(90,baseSpeed-40); // (distance,speed) 
-    // delay(2000);
+    if (Wallcase == 2)
+    {
+      // Drive forward with PID. The moment Case is no longer 2, it breaks out.
+      drive_Forward(baseSpeed, 2);
+    }
+    
+    // else if (Wallcase == 3)
+    // {
+    //   // Your original turning execution sequence (kept exactly the same)
+    //   drive_ForwardExact(90, 180);
+    //   turnArc90Right(50, wallLostTurnSpeed);
+    //   drive_ForwardExact(90, 180);
+    // }
+    
+    // else if (Wallcase == 1)
+    // {
+    //   // Your original turning execution sequence (kept exactly the same)
+    //   drive_ForwardExact(90, 180);
+    //   turnArc90Left(50, wallLostTurnSpeed);
+    //   drive_ForwardExact(90, 180);
+    // }
+    
+    else
+    {
+      // Fallback for dead ends (Case 7) or unidentified configurations
+      motorLeft.brake();
+      motorRight.brake();
+    }
 }
