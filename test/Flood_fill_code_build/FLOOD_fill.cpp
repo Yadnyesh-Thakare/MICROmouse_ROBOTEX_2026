@@ -1,13 +1,12 @@
 #include <iostream>
-
 int Direction ;
 struct Point { int x; int y; };
 struct MazeSize { int row; int col; };
 struct Currentcell { int x; int y; };
 
 // --- CUSTOMIZE HERE ---
-const Point goalCells[] = {{2,2}}; // For adding more goal 
-MazeSize mySize = {5,5};
+const Point goalCells[] = {{8,7},{7,8},{8,8},{7,7}}; // For adding more goal 
+MazeSize mySize = {16,16};
 const int numGoalCells = sizeof(goalCells) / sizeof(Point);
 
 
