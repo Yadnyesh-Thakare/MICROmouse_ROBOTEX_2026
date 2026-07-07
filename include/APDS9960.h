@@ -105,7 +105,7 @@
 #define DEFAULT_PPULSE          0x08
 #define DEFAULT_POFFSET         0
 #define DEFAULT_CONFIG          0
-#define DEFAULT_PDRIVE          LED_DRIVE_100MA
+#define DEFAULT_PDRIVE          LED_DRIVE_12_5MA //! changed for lowering the laser intensity from - LED_DRIVE_100MA 
 #define DEFAULT_PDIODE          2
 #define DEFAULT_PGAIN           PGAIN_8X
 #define DEFAULT_AGAIN           AGAIN_1X

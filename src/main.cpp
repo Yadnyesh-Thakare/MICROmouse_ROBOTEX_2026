@@ -14,6 +14,8 @@
 #include <queue>
 #include <math.h> // For sigmoid function (exp)
 #include <M25_PINS.h> // For the defined pins
+#include <APDS9960.h>
+
 
 // =================================================================
 // ============== CONFIGURABLE START & GOAL SETTINGS ===============
@@ -333,25 +335,34 @@ void setup() {
 // ------------------- Main loop -------------------
 void loop() 
 {
-    switch (currentState) {
-        case FOLLOW_LEFT:
-            followRightWall();
-            break;
-        case EXPLORING:
-            runExploration();
-            break;
-        case AWAITING_FAST_RUN:
-            currentState = FAST_RUN; // Auto-start fast run for testing
-            break;
-        case FAST_RUN:
-            performFastRun();
-            currentState = FOLLOW_LEFT;
-            break;
-        case FINISHED:
-            stopMotors();
-            delay(1000);
-            break;
-    }
+
+
+    readAllSensors();
+    Serial.println("Sensor Readings - Left: "); 
+    Serial.print(proxL); 
+    Serial.print( "  |||||||| ");
+    Serial.print("Sensor Readings - Right: "); 
+    Serial.print(proxR); 
+
+    // switch (currentState) {
+    //     case FOLLOW_LEFT:
+    //         followRightWall();
+    //         break;
+    //     case EXPLORING:
+    //         runExploration();
+    //         break;
+    //     case AWAITING_FAST_RUN:
+    //         currentState = FAST_RUN; // Auto-start fast run for testing
+    //         break;
+    //     case FAST_RUN:
+    //         performFastRun();
+    //         currentState = FOLLOW_LEFT;
+    //         break;
+    //     case FINISHED:
+    //         stopMotors();
+    //         delay(1000);
+    //         break;
+    // }
 }
 
 // ================= NEW TIMER AND BUTTON FUNCTIONS =================
@@ -504,7 +515,8 @@ void senseWallsAtCurrentCell() {
     if ((cellWalls & WALL_W) && inBounds(robotX - 1, robotY)) wallsMap[robotY][robotX - 1] |= WALL_E;
 }
 
-void readAllSensors() {
+void readAllSensors() 
+{
     uint8_t rawValue;
     
     Wire.end();
