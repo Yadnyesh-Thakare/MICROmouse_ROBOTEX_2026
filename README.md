@@ -1,17 +1,36 @@
 # Micromouse 🐭 
-
+---
 ## Introduction 
 A **Micromouse** is a small, autonomous, battery-operated robot designed to navigate through an **unknown maze**, map its layout and find the **fastest path** to the **GOAL**.
 
 The mice are completely autonomous robots that must find their way from a predetermined starting position to the predetermined goal area of the maze unaided. The mouse needs to keep track of where it is, discover walls as it explores, map out the maze and detect when it has reached the goal. Having reached the goal, the mouse will typically perform additional searches of the maze until it has found an optimal route from the start to the finish. Once the optimal route has been found, the mouse will traverse that route in the shortest achievable time. 
 
+---
 ## Design 
-![Mushaka](Images/WhatsApp Image 2026-06-20 at 1.04.46 PM.jpeg)
+![Mushaka](Media/Mushaka.jpeg)
 
+---
 
-## Hardware Part 
+## Hardware Part
+
+- **Microcontroller** - [ESP-32 Dev Module- 30-pins](https://randomnerdtutorials.com/getting-started-with-esp32/)
+- **Motor with Encoder** - [N20_300Rpm](https://robu.in/product/n20-12v-300rpm-micro-metal-gear-motor-with-encoder/)
+- **Motor Driver** - [TB6612fng](https://learn.sparkfun.com/tutorials/tb6612fng-hookup-guide/all)
+- **Sensors**
+  - [MPU 6050](https://robu.in/product/mpu-6050-gyro-sensor-2-accelerometer/)
+  - [VL53L0X TOF Laser Distance Sensor](https://robu.in/product/vl53l0x-tof-based-lidar-laser-distance-sensor/)
+- **Power**
+  - LiPo-3S Battery 450mah
+  - [AMS 5V-3.3V](https://media.digikey.com/pdf/Data%20Sheets/UTD%20Semi%20PDFs/AMS1117.pdf)
+- **Swith**
+- **Resistor** 
+- **Leds**
+- **Connector**
+  
+---
 
 ## Software Part 
+
 - [**Platform.io**](https://platformio.org/)  - We use platform.io extesion in Vscode for handeling libraries and uploading code to ESP32.
   ### Library Used
   - [**TB6612FNG Motor Driver**](https://github.com/sparkfun/SparkFun_TB6612FNG_Arduino_Library) - For motor controlling. 
@@ -23,6 +42,7 @@ The mice are completely autonomous robots that must find their way from a predet
   - [**APDS9960 Sensor**](https://github.com/sparkfun/SparkFun_APDS-9960_Sensor_Arduino_Library.git) - For APDS9960 sensor.
   - [**APDS9960 Sensor**](include/APDS9960.h) - Custom libraary for APDS9960 sensor.
 
+----
 
 # References 
 https://medium.com/@minikiraniamayadharmasiri/micromouse-from-scratch-algorithm-maze-traversal-shortest-path-floodfill-741242e8510
