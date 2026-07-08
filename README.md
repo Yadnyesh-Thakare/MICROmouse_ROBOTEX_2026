@@ -5,6 +5,12 @@ A **Micromouse** is a small, autonomous, battery-operated robot designed to navi
 
 The mice are completely autonomous robots that must find their way from a predetermined starting position to the predetermined goal area of the maze unaided. The mouse needs to keep track of where it is, discover walls as it explores, map out the maze and detect when it has reached the goal. Having reached the goal, the mouse will typically perform additional searches of the maze until it has found an optimal route from the start to the finish. Once the optimal route has been found, the mouse will traverse that route in the shortest achievable time. 
 
+## Design 
+![Mushaka](images/Mushaka.jpeg)
+
+
+## Hardware Part 
+
 ## Software Part 
 - [**Platform.io**](https://platformio.org/)  - We use platform.io extesion in Vscode for handeling libraries and uploading code to ESP32.
   ### Library Used
