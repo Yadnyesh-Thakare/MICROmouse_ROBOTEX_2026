@@ -19,7 +19,9 @@ Mice used in competitions employ the fundamental elements of robot navigation, i
 
 ---
 ## Design 
-![Mushaka](Media/Mushaka.jpeg) | ![MushakaR](Media/MushakaR.jpeg)
+| Back | Side |
+| --- | --- |
+| ![Mushaka](Media/Mushaka.jpeg) | ![MushakaR](Media/MushakaR.jpeg) |
 
 ---
 
