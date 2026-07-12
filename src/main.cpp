@@ -9,13 +9,12 @@
  */
 #include <Arduino.h>
 #include <Wire.h> // For I2C communication
-#include <SparkFun_APDS9960.h> // For the side wall sensorsj
 #include <SparkFun_TB6612.h> // For the motor driver
 #include <queue>
 #include <math.h> // For sigmoid function (exp)
-#include <M25_PINS.h> // For the defined pins
-#include <APDS9960.h>
-
+#include <M26_PINS.h> // For the defined pins
+#include <Adafruit_VL53L0X.h>
+#include <ESP32Encoder.h>
 
 // =================================================================
 // ============== CONFIGURABLE START & GOAL SETTINGS ===============
@@ -41,7 +40,8 @@ unsigned long wallFollowStartTime = 0;
 bool timerActive = false;
 
 // Wall follow mode selection
-enum WallFollowMode {
+enum WallFollowMode 
+{
     ONLY_RIGHT_WALL, // Continue with right wall follow only
     SWITCH_TO_LEFT_WALL, // Switch to left wall follow after timer
     LEFT_WALL_ONLY // Only left wall follow (direct selection)
@@ -65,13 +65,20 @@ const int echoPin = 18;
 // --- Hardware Objects ---
 Motor motorLeft = Motor(AIN1, AIN2, PWMA, 1, STBY_PIN);
 Motor motorRight = Motor(BIN1, BIN2, PWMB, 1, STBY_PIN);
-SparkFun_APDS9960 apdsLeft;
-SparkFun_APDS9960 apdsRight;
+
+ESP32Encoder leftEncoderCount;
+ESP32Encoder rightEncoderCount;
+
+// Create data structures to hold the measurements
+Adafruit_VL53L0X sensorCenter = Adafruit_VL53L0X();
+Adafruit_VL53L0X sensorLeft   = Adafruit_VL53L0X();
+Adafruit_VL53L0X sensorRight  = Adafruit_VL53L0X();
+
 
 // --- Robot Physical Constants ---
-const float WHEEL_DIAMETER_CM = 3.5;
-const float WHEEL_SEPARATION_CM = 11.0;
-const int ENCODER_CPR = 345;
+const float WHEEL_DIAMETER_CM = 5.0;
+const float WHEEL_SEPARATION_CM = 10.0;
+const int ENCODER_CPR = 280;
 const float CM_PER_TICK = (PI * WHEEL_DIAMETER_CM) / ENCODER_CPR;
 #define CELL_DISTANCE_CM 18.0
 
@@ -101,8 +108,14 @@ float wallPIDValue = 0;
 
 #define MAX_INTEGRAL 25 // Reduced for better stability
 
+// MPU6050 GYROSCOPE FUNCTIONS
+float gyroBiasZ = 0.0;  // stored in dps
+float yaw = 0.0;
+unsigned long lastUpdate = 0;
+
 // --- Enhanced Sigmoidal Speed Parameters ---
-struct SpeedProfile {
+struct SpeedProfile 
+{
     int startSpeed;
     int endSpeed; 
     float sigmoidScale;
@@ -111,7 +124,8 @@ struct SpeedProfile {
 };
 
 // Exploration mode (safer for narrow corridors)
-SpeedProfile explorationProfile = {
+SpeedProfile explorationProfile = 
+{
     80, // startSpeed - Reduced for tight spaces
     50, // endSpeed - Lower for precise stopping
     8.0, // sigmoidScale - Moderate transition steepness
@@ -123,7 +137,8 @@ SpeedProfile explorationProfile = {
 SpeedProfile fastProfile; // Global variable to hold the selected fast profile
 
 // Profile A (for B_1 press)
-SpeedProfile fastProfileA = {
+SpeedProfile fastProfileA = 
+{
     150, // startSpeed - Reduced from 160 for safety in narrow corridors
     110, // endSpeed - Still controlled ending
     25.0, // sigmoidScale - Sharper transitions
@@ -132,7 +147,8 @@ SpeedProfile fastProfileA = {
 };
 
 // Profile B (for B_2 press)
-SpeedProfile fastProfileB = {
+SpeedProfile fastProfileB = 
+{
     120, // startSpeed - Reduced from 160 for safety in narrow corridors
     100, // endSpeed - Still controlled ending
     20.0, // sigmoidScale - Sharper transitions
@@ -142,15 +158,13 @@ SpeedProfile fastProfileB = {
 
 
 // --- Sensor Calibration ---
-const int LEFT_WALL_THRESHOLD = 30;
-const int RIGHT_WALL_THRESHOLD = 30;
-const int FRONT_WALL_THRESHOLD = 8;
-int RIGHT_WALL_TARGET = 57;
-int LEFT_WALL_TARGET = 57;
+const int LEFT_WALL_THRESHOLD = 135;
+const int RIGHT_WALL_THRESHOLD = 135;
+const int FRONT_WALL_THRESHOLD = 265;
+int RIGHT_WALL_TARGET = 95;
+int LEFT_WALL_TARGET = 95;
 
 // --- Global State & Maze Variables ---
-volatile long encoderCountLeft = 0;
-volatile long encoderCountRight = 0;
 
 const int GRID_SIZE = 15;
 int distMap[GRID_SIZE][GRID_SIZE];
@@ -168,7 +182,8 @@ int robotX = 0, robotY = 0;
 Heading robotHeading = EAST;
 
 // Modified Program States to include timed wall following
-enum ProgramState {
+enum ProgramState 
+{
     FOLLOW_LEFT, // Continuous left wall follow 
     EXPLORING, 
     AWAITING_FAST_RUN, 
@@ -188,13 +203,13 @@ const unsigned long DEBOUNCE_DELAY = 10; // 250ms debounce delay
 /////////////////WALL FOLLOW DECLARATIONS/////////////
 long duration;
 float distanceCm;
-int WF_FRONT_WALL_THRESHOLD = 11; // cm threshold for front block
+int WF_FRONT_WALL_THRESHOLD = 110; // mm threshold for front block
 
 // --- Global readings (APDS mapped 0..500; ultrasonic cm as float)
 // --- Right-wall PID (single loop)
 // --- Targets and thresholds
 int WALL_TARGET = 58; // Increased for better wall tracking
-#define WALL_THRESHOLD 9 // proxR > this => right wall present
+#define WALL_THRESHOLD 135 // proxR > this => right wall present
 
 float WF_wallKp = 1.5, WF_wallKi = 0.01, WF_wallKd = 8.0;
 #define WF_MAX_INTEGRAL 25
@@ -212,7 +227,8 @@ int SPIN_SPEED = 100; // Moderate speed for control
 int SPIN_DURATION = 340; // Longer duration for proper turn
 
 // --- FSM states (minimal)
-enum TurnState {
+enum TurnState 
+{
     NONE,
     LEFT_FIND_ALIGN,
     ARC_RIGHT_FIND
@@ -233,6 +249,7 @@ void runExploration();
 void performFastRun();
 void pathReturnToStart();
 void attachHardware();
+void updateYAW();
 bool nextCellTowardsGoal(int &nx, int &ny);
 bool nextCellTowardsGoalFinal(int &nx, int &ny);
 void senseWallsAtCurrentCell();
@@ -334,15 +351,11 @@ void setup() {
 
 // ------------------- Main loop -------------------
 void loop() 
-{
-
-
+{   
+    senseWallsAtCurrentCell();
+    updateYAW();
     readAllSensors();
-    Serial.println("Sensor Readings - Left: "); 
-    Serial.print(proxL); 
-    Serial.print( "  |||||||| ");
-    Serial.print("Sensor Readings - Right: "); 
-    Serial.print(proxR); 
+
 
     // switch (currentState) {
     //     case FOLLOW_LEFT:
@@ -369,7 +382,8 @@ void loop()
 
 
 
-bool checkButton(int buttonPin, unsigned long &lastPressTime) {
+bool checkButton(int buttonPin, unsigned long &lastPressTime) 
+{
     unsigned long currentTime = millis();
     
     if (digitalRead(buttonPin) == HIGH && (currentTime - lastPressTime) > DEBOUNCE_DELAY) {
@@ -381,7 +395,8 @@ bool checkButton(int buttonPin, unsigned long &lastPressTime) {
 
 
 // Function to select the fast run speed profile
-void selectFastRunMode() {
+void selectFastRunMode() 
+{
     Serial.println("\n=== SELECT FAST RUN PROFILE ===");
     Serial.println("Button 1: Normal Fast Run Profile");
     Serial.println("Button 2: Slower, More Controlled Fast Run Profile");
@@ -420,64 +435,157 @@ void selectFastRunMode() {
 // ================= HARDWARE-SPECIFIC FUNCTIONS ===================
 // =================================================================
 
-void attachHardware() {
+
+void initSensors() 
+{
+  pinMode(XSHUT_CENTER, OUTPUT);
+  pinMode(XSHUT_LEFT,   OUTPUT);
+  pinMode(XSHUT_RIGHT,  OUTPUT);
+
+  // Pull all XSHUT pins LOW to reset every sensor
+  digitalWrite(XSHUT_CENTER, LOW);
+  digitalWrite(XSHUT_LEFT,   LOW);
+  digitalWrite(XSHUT_RIGHT,  LOW);
+  delay(10);
+
+  // Bring up sensors one-by-one and assign unique I2C addresses
+  digitalWrite(XSHUT_CENTER, HIGH); delay(10);
+  if (!sensorCenter.begin(ADDRESS_CENTER)) {
+    Serial.println("FATAL: Center sensor failed!"); while (1);
+  }
+
+  digitalWrite(XSHUT_LEFT, HIGH); delay(10);
+  if (!sensorLeft.begin(ADDRESS_LEFT)) {
+    Serial.println("FATAL: Left sensor failed!"); while (1);
+  }
+
+  digitalWrite(XSHUT_RIGHT, HIGH); delay(10);
+  if (!sensorRight.begin(ADDRESS_RIGHT)) {
+    Serial.println("FATAL: Right sensor failed!"); while (1);
+  }
+
+  Serial.println("All sensors initialised.");
+}
+
+void WKnC_MPU() 
+{
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);
+  Wire.write(0x00);
+  Wire.endTransmission(true);
+
+  // Gyro ±500 dps
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x1B);
+  Wire.write(0x08);
+  Wire.endTransmission(true);
+
+  delay(10);
+
+  Serial.println("Keep robot completely still...");
+  delay(1000);
+
+  float sum = 0;
+  for (int i = 0; i < 200; i++) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x47);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_ADDR, 2);
+    sum += (int16_t)(Wire.read() << 8 | Wire.read()) / 65.5;
+    delay(10);
+  }
+  gyroBiasZ = sum / 200.0;
+  Serial.print("Gyro Bias Z = ");
+  Serial.println(gyroBiasZ);
+}
+
+void updateYAW() 
+{
+  if (micros() - lastUpdate >= 1000) {
+
+    float dt = (micros() - lastUpdate) / 1000000.0;
+    lastUpdate = micros();
+
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x47);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_ADDR, 2);
+
+    int16_t rawGz = (Wire.read() << 8) | Wire.read();
+    float gyroZ = (rawGz / 65.5) - gyroBiasZ;
+
+    if (fabs(gyroZ) < 0.4) gyroZ = 0;
+
+    yaw += gyroZ * dt;
+
+    //Serial.print("Gyro Z: ");
+    //Serial.print(gyroZ);
+    //Serial.print(" dps   Yaw: ");
+    //Serial.println(yaw);
+  }
+}
+
+void attachHardware() 
+{
+    Wire.begin();
+
     pinMode(STBY_PIN, OUTPUT);
     digitalWrite(STBY_PIN, HIGH);
-    
-    pinMode(trigPin, OUTPUT);
-    pinMode(echoPin, INPUT);
+
     pinMode(LEDR, OUTPUT);
     pinMode(LEDL, OUTPUT);
     
-    Wire.begin(SDA_LEFT, SCL_LEFT);
-    apdsLeft.init();
-    apdsLeft.setProximityGain(PGAIN_2X);
-    apdsLeft.enableProximitySensor(false);
-    Wire.end();
+    pinMode(XSHUT_CENTER, OUTPUT);
+    pinMode(XSHUT_LEFT,   OUTPUT);
+    pinMode(XSHUT_RIGHT,  OUTPUT);
+
+    initSensors();
+    WKnC_MPU();
     
-    Wire.begin(SDA_RIGHT, SCL_RIGHT);
-    apdsRight.init();
-    apdsRight.setProximityGain(PGAIN_2X);
-    apdsRight.enableProximitySensor(false);
-    
-    Serial.println("Sensors initialized");
-    
-    pinMode(ENCL_A, INPUT_PULLUP);
-    pinMode(ENCR_A, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(ENCL_A), isrLeftEncoder, FALLING);
-    attachInterrupt(digitalPinToInterrupt(ENCR_A), isrRightEncoder, FALLING);
-    
+    leftEncoderCount.attachHalfQuad(ENCL_A, ENCL_B);
+    rightEncoderCount.attachHalfQuad(ENCR_A, ENCR_B);
+
+    leftEncoderCount.clearCount();
+    rightEncoderCount.clearCount();
+
+    Serial.println("All sensors initialised.");
     Serial.println("Hardware attached.");
 }
 
-float readFrontSensor() {
-    digitalWrite(trigPin, LOW);
-    delayMicroseconds(2);
-    digitalWrite(trigPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(trigPin, LOW);
-    
-    long read_duration = pulseIn(echoPin, HIGH, SENSOR_TIMEOUT);
-    if (read_duration == 0) return 40.0;
-    return read_duration * 0.0343 / 2.0;
-}
 
-void stopMotors() {
+void stopMotors() 
+{
     motorLeft.brake();
     motorRight.brake();
 }
 
-void setMotorSpeeds(int leftSpeed, int rightSpeed) {
+void setMotorSpeeds(int leftSpeed, int rightSpeed) 
+{
     motorLeft.drive(leftSpeed);
     motorRight.drive(rightSpeed * MOTOR_CORRECTION);
 }
 
-void senseWallsAtCurrentCell() {
+void readAllSensors() 
+{
+    VL53L0X_RangingMeasurementData_t mLeft, mCenter, mRight;
+
+    sensorLeft.rangingTest(&mLeft,     false);
+    sensorCenter.rangingTest(&mCenter, false);
+    sensorRight.rangingTest(&mRight,   false);
+
+    //* Cap out-of-range readings to safe defaults
+    proxL = (mLeft.RangeStatus   != 4) ? mLeft.RangeMilliMeter   : 200;
+    frontVal = (mCenter.RangeStatus != 4) ? mCenter.RangeMilliMeter : 800;
+    proxR  = (mRight.RangeStatus  != 4) ? mRight.RangeMilliMeter  : 200;
+}
+
+void senseWallsAtCurrentCell() 
+{
     uint8_t cellWalls = wallsMap[robotY][robotX];
     readAllSensors();
     
-    bool leftWall = proxL > LEFT_WALL_THRESHOLD;
-    bool rightWall = proxR > RIGHT_WALL_THRESHOLD;
+    bool leftWall = proxL < LEFT_WALL_THRESHOLD;
+    bool rightWall = proxR < RIGHT_WALL_THRESHOLD;
     bool frontWall = frontVal < FRONT_WALL_THRESHOLD;
     
     digitalWrite(LEDR, rightWall ? HIGH : LOW);
@@ -488,19 +596,22 @@ void senseWallsAtCurrentCell() {
     if(rightWall) Serial.println(" -> Right Wall");
     if(frontWall) Serial.println(" -> Front Wall");
     
-    if (leftWall) { 
+    if (leftWall) 
+    { 
         if (robotHeading == NORTH) cellWalls |= WALL_W; 
         else if (robotHeading == EAST) cellWalls |= WALL_N; 
         else if (robotHeading == SOUTH) cellWalls |= WALL_E; 
         else cellWalls |= WALL_S; 
     }
-    if (rightWall) { 
+    if (rightWall) 
+    { 
         if (robotHeading == NORTH) cellWalls |= WALL_E; 
         else if (robotHeading == EAST) cellWalls |= WALL_S; 
         else if (robotHeading == SOUTH) cellWalls |= WALL_W; 
         else cellWalls |= WALL_N; 
     }
-    if (frontWall) { 
+    if (frontWall) 
+    { 
         if (robotHeading == NORTH) cellWalls |= WALL_N; 
         else if (robotHeading == EAST) cellWalls |= WALL_E; 
         else if (robotHeading == SOUTH) cellWalls |= WALL_S; 
@@ -515,45 +626,33 @@ void senseWallsAtCurrentCell() {
     if ((cellWalls & WALL_W) && inBounds(robotX - 1, robotY)) wallsMap[robotY][robotX - 1] |= WALL_E;
 }
 
-void readAllSensors() 
-{
-    uint8_t rawValue;
-    
-    Wire.end();
-    Wire.begin(SDA_LEFT, SCL_LEFT, 400000);
-    apdsLeft.readProximity(rawValue);
-    proxL = map(rawValue, 0, 255, 0, 500);
-    
-    Wire.end();
-    Wire.begin(SDA_RIGHT, SCL_RIGHT, 400000);
-    apdsRight.readProximity(rawValue);
-    proxR = map(rawValue, 0, 255, 0, 500);
-    
-    frontVal = readFrontSensor();
-}
 
-void followRightWall(){
+void followRightWall()
+{
     readAllSensors();
-    bool hasRightWall = proxR > WALL_THRESHOLD;
-    bool hasLeftWall = proxL > WALL_THRESHOLD;
+    bool hasRightWall = proxR < WALL_THRESHOLD;
+    bool hasLeftWall = proxL < WALL_THRESHOLD;
     bool frontBlocked = frontVal < WF_FRONT_WALL_THRESHOLD;
     
     digitalWrite(LEDR, hasRightWall ? HIGH : LOW);
     digitalWrite(LEDL, hasLeftWall ? HIGH : LOW);
     
-    if (!hasRightWall) {
+    if (!hasRightWall) 
+    {
         WF_wallPID_R(0); // Target 0 when no wall to guide toward right
         float corr = constrain(wallPIDValue, -PID_ARC_CLAMP, PID_ARC_CLAMP);
         int leftSpeed = constrain(ARC_SPEED_OUTER - (int)corr, -255, 255);
         int rightSpeed = constrain(ARC_SPEED_INNER + (int)corr, -255, 255);
         setMotorSpeeds(leftSpeed, rightSpeed);
     }
-    else if (frontBlocked) { 
+    else if (frontBlocked) 
+    { 
         // IMPROVED SPIN: Proper duration and speed
         setMotorSpeeds(-SPIN_SPEED, SPIN_SPEED);
         // delay(10);
     }
-    else {
+    else 
+    {
         // NORMAL WALL FOLLOWING: More precise PID
         WF_wallPID_R(proxR);
         int leftSpeed = constrain(WF_BASE_SPEED - (int)wallPIDValue, -255, 255);
@@ -562,16 +661,18 @@ void followRightWall(){
     }
 }
 
-void followLeftWall(){
+void followLeftWall()
+{
     readAllSensors();
-    bool hasRightWall = proxR > WALL_THRESHOLD;
-    bool hasLeftWall = proxL > WALL_THRESHOLD;
+    bool hasRightWall = proxR < WALL_THRESHOLD;
+    bool hasLeftWall = proxL < WALL_THRESHOLD;
     bool frontBlocked = frontVal < WF_FRONT_WALL_THRESHOLD;
     
     digitalWrite(LEDR, hasRightWall ? HIGH : LOW);
     digitalWrite(LEDL, hasLeftWall ? HIGH : LOW);
     
-    if (!hasLeftWall) {
+    if (!hasLeftWall) 
+    {
         // Arc LEFT to find the left wall (right motor faster)
         WF_wallPID_L(0); // Target 0 when no wall to guide toward left
         float corr = constrain(wallPIDValue, -PID_ARC_CLAMP, PID_ARC_CLAMP);
@@ -579,12 +680,14 @@ void followLeftWall(){
         int rightSpeed = constrain(ARC_SPEED_OUTER + (int)corr, -255, 255);
         setMotorSpeeds(leftSpeed, rightSpeed);
     }
-    else if (frontBlocked) { 
+    else if (frontBlocked) 
+    { 
         // Turn RIGHT when front is blocked (left wall following)
         setMotorSpeeds(SPIN_SPEED, -SPIN_SPEED);
         // delay(10);
     }
-    else {
+    else 
+     {
         // NORMAL WALL FOLLOWING: Follow left wall with PID
         WF_wallPID_L(proxL);
         int leftSpeed = constrain(WF_BASE_SPEED - (int)wallPIDValue, -255, 255);
@@ -593,8 +696,9 @@ void followLeftWall(){
     }
 }
 
-void WF_wallPID_R(unsigned int proxR_) {
-    wallError = (float)proxR_ - WALL_TARGET;
+void WF_wallPID_R(unsigned int proxR_) 
+{
+    wallError =  WALL_TARGET - (float)proxR_;
     
     // Integral with windup protection
     wallInt += wallError;
@@ -605,8 +709,9 @@ void WF_wallPID_R(unsigned int proxR_) {
     wallPIDValue = WF_wallKp * wallError + WF_wallKi * wallInt + WF_wallKd * wallDeriv;
 }
 
-void WF_wallPID_L(unsigned int proxL_) {
-    wallError = WALL_TARGET - (float)proxL_;
+void WF_wallPID_L(unsigned int proxL_) 
+{
+    wallError = - (float)proxL_ - WALL_TARGET; 
     
     // Integral with windup protection
     wallInt += wallError;
@@ -637,8 +742,9 @@ void wallPID(unsigned int proxL, unsigned int proxR) {
 }
 
 // Enhanced Encoder PID with integral windup protection
-void encoderPID() {
-    encoderError = encoderCountLeft - encoderCountRight;
+void encoderPID() 
+{
+    encoderError = leftEncoderCount.getCount() - rightEncoderCount.getCount();
     
     // Integral windup protection
     if (abs(encoderPIDValue) < 100) { // Only accumulate when output isn't saturated
@@ -652,12 +758,12 @@ void encoderPID() {
     encoderPIDValue = encoderKp * encoderError + encoderKi * encoderInt + encoderKd * encoderDeriv;
 }
 
-void moveForwardOneCell() {
+void moveForwardOneCell() 
+{
     long targetTicks = CELL_DISTANCE_CM / CM_PER_TICK;
-    noInterrupts();
-    encoderCountLeft = 0;
-    encoderCountRight = 0;
-    interrupts();
+    
+    leftEncoderCount.clearCount();
+    rightEncoderCount.clearCount();
     
     // Use exploration profile for narrow corridors
     SpeedProfile profile = explorationProfile;
@@ -667,7 +773,7 @@ void moveForwardOneCell() {
     int previousSpeed = profile.startSpeed;
     
     while (true) {
-        long avgTicks = (encoderCountLeft + encoderCountRight) / 2;
+        long avgTicks = (leftEncoderCount.getCount() + rightEncoderCount.getCount())/2;
         if (avgTicks >= targetTicks) break;
         
         float progress = (float)avgTicks / (float)targetTicks;
@@ -730,7 +836,7 @@ void moveForwardOneCell() {
         } else if (hasRightWall) {
             digitalWrite(LEDL, LOW); 
             digitalWrite(LEDR, HIGH);
-            wallError = RIGHT_WALL_TARGET - (float)proxR;
+            wallError = (float)proxR - RIGHT_WALL_TARGET;
             wallInt += wallError; 
             float wallDeriv = wallError - wallPrev; 
             wallPrev = wallError;
@@ -739,7 +845,7 @@ void moveForwardOneCell() {
         } else if (hasLeftWall) {
             digitalWrite(LEDL, HIGH); 
             digitalWrite(LEDR, LOW);
-            wallError = (float)proxL - LEFT_WALL_TARGET;
+            wallError = LEFT_WALL_TARGET - (float)proxL;
             wallInt += wallError; 
             float wallDeriv = wallError - wallPrev; 
             wallPrev = wallError;
@@ -768,12 +874,12 @@ void moveForwardOneCell() {
     delay(5); // Slightly longer settling time
 }
 
-void moveForwardOneCellFast() {
+void moveForwardOneCellFast() 
+{
     long targetTicks = CELL_DISTANCE_CM / CM_PER_TICK;
-    noInterrupts();
-    encoderCountLeft = 0;
-    encoderCountRight = 0;
-    interrupts();
+    
+    leftEncoderCount.clearCount();
+    rightEncoderCount.clearCount();
 
     // Use the globally selected fast run profile
     SpeedProfile profile = fastProfile;
@@ -782,21 +888,25 @@ void moveForwardOneCellFast() {
 
     encoderInt = 0; encoderPrev = 0; wallInt = 0; wallPrev = 0;
 
-    while (true) {
-        long avgTicks = (encoderCountLeft + encoderCountRight) / 2;
+    while (true) 
+    {
+        long avgTicks = (leftEncoderCount.getCount() + rightEncoderCount.getCount()) / 2;
         if (avgTicks >= targetTicks) break;
 
         float progress = (float)avgTicks / (float)targetTicks;
 
         // ---- Sigmoidal Speed Profile (accel/decel) ----
         int dynamicSpeed;
-        if (progress <= profile.transitionPoint) {
+        if (progress <= profile.transitionPoint) 
+        {
             // Acceleration phase
             float accelProgress = progress / profile.transitionPoint;
             float sigmoidInput = profile.sigmoidScale * (accelProgress - 0.5);
             float sigmoidOutput = 1.0 / (1.0 + exp(-sigmoidInput));
             dynamicSpeed = profile.endSpeed + (int)((profile.startSpeed - profile.endSpeed) * sigmoidOutput);
-        } else {
+        } 
+        else 
+        {
             // Deceleration phase
             float decelProgress = (progress - profile.transitionPoint) / (1.0 - profile.transitionPoint);
             float sigmoidInput = profile.sigmoidScale * (0.5 - decelProgress);
@@ -818,7 +928,8 @@ void moveForwardOneCellFast() {
         bool hasRightWall = proxR > RIGHT_WALL_THRESHOLD;
 
         // --- Adaptive Dual Wall PID (fast mode) ---
-        if (hasLeftWall && hasRightWall) {
+        if (hasLeftWall && hasRightWall) 
+        {
             float narrowKp = 2.0; // stronger correction for speed
             float narrowKi = 0.03;
             float narrowKd = 10.0;
@@ -831,13 +942,17 @@ void moveForwardOneCellFast() {
             wallPrev = wallError;
 
             wallPIDValue = narrowKp * wallError + narrowKi * wallInt + narrowKd * wallDeriv;
-        } else if (hasRightWall) {
+        } 
+        else if (hasRightWall) 
+        {
             wallError = RIGHT_WALL_TARGET - (float)proxR;
             wallInt += wallError; 
             float wallDeriv = wallError - wallPrev; 
             wallPrev = wallError;
             wallPIDValue = 2.1 * wallError + 0.02 * wallInt + 13.0 * wallDeriv;
-        } else if (hasLeftWall) {
+        } 
+        else if (hasLeftWall) 
+        {
             wallError = (float)proxL - LEFT_WALL_TARGET;
             wallInt += wallError; 
             float wallDeriv = wallError - wallPrev; 
@@ -868,15 +983,14 @@ void turn(float degrees, int speed) {
     float distance_per_wheel = (abs(degrees) / 360.0) * (PI * WHEEL_SEPARATION_CM);
     long targetTicks = distance_per_wheel / CM_PER_TICK;
     
-    noInterrupts();
-    encoderCountLeft = 0;
-    encoderCountRight = 0;
-    interrupts();
+    leftEncoderCount.clearCount();
+    rightEncoderCount.clearCount();
     
     if (degrees > 0) setMotorSpeeds(speed, -speed);
     else setMotorSpeeds(-speed, speed);
     
-    while ((abs(encoderCountLeft) + abs(encoderCountRight)) / 2 < targetTicks) {
+    while ((abs(leftEncoderCount.getCount()) + abs(rightEncoderCount.getCount())) / 2 < targetTicks) 
+    {
         delay(5);
     }
     
@@ -943,8 +1057,8 @@ void executeMoveToFast(int nx, int ny) {
 // ================= ALGORITHM & UTILITY FUNCTIONS =================
 // =================================================================
 
-void IRAM_ATTR isrLeftEncoder() { encoderCountLeft++; }
-void IRAM_ATTR isrRightEncoder() { encoderCountRight++; }
+//? void IRAM_ATTR isrLeftEncoder() { encoderCountLeft++; }
+//? void IRAM_ATTR isrRightEncoder() { encoderCountRight++; }
 
 bool inBounds(int x, int y) { 
     return x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE; 

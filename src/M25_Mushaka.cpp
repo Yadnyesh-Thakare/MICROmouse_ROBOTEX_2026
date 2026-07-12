@@ -409,7 +409,7 @@ void selectFastRunMode() {
 // ================= HARDWARE-SPECIFIC FUNCTIONS ===================
 // =================================================================
 
-void attachHardware() {
+void   attachHardware() {
     pinMode(STBY_PIN, OUTPUT);
     digitalWrite(STBY_PIN, HIGH);
     
@@ -439,7 +439,8 @@ void attachHardware() {
     Serial.println("Hardware attached.");
 }
 
-float readFrontSensor() {
+float readFrontSensor() 
+{
     digitalWrite(trigPin, LOW);
     delayMicroseconds(2);
     digitalWrite(trigPin, HIGH);
@@ -451,17 +452,20 @@ float readFrontSensor() {
     return read_duration * 0.0343 / 2.0;
 }
 
-void stopMotors() {
+void stopMotors() 
+{
     motorLeft.brake();
     motorRight.brake();
 }
 
-void setMotorSpeeds(int leftSpeed, int rightSpeed) {
+void setMotorSpeeds(int leftSpeed, int rightSpeed) 
+{
     motorLeft.drive(leftSpeed);
     motorRight.drive(rightSpeed * MOTOR_CORRECTION);
 }
 
-void senseWallsAtCurrentCell() {
+void senseWallsAtCurrentCell() 
+{
     uint8_t cellWalls = wallsMap[robotY][robotX];
     readAllSensors();
     
@@ -519,7 +523,7 @@ void readAllSensors() {
     
     frontVal = readFrontSensor();
 }
-
+ 
 void followRightWall(){
     readAllSensors();
     bool hasRightWall = proxR > WALL_THRESHOLD;

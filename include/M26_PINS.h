@@ -1,16 +1,16 @@
 //! --- Motor ----
 //? Left Motor (Treated as Motor A)
-#define PWMR 26
-#define RIN1 4
-#define RIN2 25
+#define AIN1 4  
+#define AIN2 25
+#define PWMA 26
 
 //? Right Motor (Treated as Motor B)
-#define LIN1 17
-#define LIN2 5
-#define PWML 18 
+#define BIN1 17
+#define BIN2 5
+#define PWMB 18
 
 //? --- Standby Pin ---
-#define STBY 16
+#define STBY_PIN 16
 
 //? --- Motor Offsets ---
 // These are constants that help fix wiring issues. 
@@ -18,7 +18,7 @@
 const int offsetL = -1;
 const int offsetR = 1;  
 
-//!  --- Encoder Pins ---  
+//!  --- Encoder Pins --- 
 
 #define ENCL_A 19
 #define ENCL_B 23
@@ -27,8 +27,8 @@ const int offsetR = 1;
 
 //! --- LED Pins ---
 
-#define LEDL 12
 #define LEDR 32
+#define LEDL 12
 
 //! --- Button Pins ---
 
@@ -52,3 +52,4 @@ const int offsetR = 1;
 
 //? Define new I2C Addresses for the MPU6050 Gyroscope/Accelerometer
 #define MPU_ADDR 0x68
+     

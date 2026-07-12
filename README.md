@@ -15,7 +15,7 @@ Mice used in competitions employ the fundamental elements of robot navigation, i
 - [Youtube-Veritasium](https://youtu.be/kS-CGkiPetQ?si=YEajZapBpJQ0w8H1)
 
   
-> ❗*For this project we have used Flood-fill alog* 
+> ❗*For this project we have used Flood-fill algo* 
 
 ---
 ## Design 
@@ -44,6 +44,8 @@ Mice used in competitions employ the fundamental elements of robot navigation, i
 ---
 
 ## Software Part 
+
+> ❗*Add Better Comments by "Aaron Bond" for better reading and understandign of code* 
 
 - [**Platform.io**](https://platformio.org/)  - We use platform.io extesion in Vscode for handeling libraries and uploading code to ESP32.
   ### Library Used
