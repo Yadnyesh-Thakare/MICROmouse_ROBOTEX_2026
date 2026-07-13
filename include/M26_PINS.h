@@ -1,12 +1,12 @@
 //! --- Motor ----
-//? Left Motor (Treated as Motor A)
+//? Right Motor (Treated as Motor A)
 #define AIN1 4  
 #define AIN2 25
 #define PWMA 26
 
-//? Right Motor (Treated as Motor B)
-#define BIN1 17
-#define BIN2 5
+//? Left Motor (Treated as Motor B)
+#define BIN1 5
+#define BIN2 17
 #define PWMB 18
 
 //? --- Standby Pin ---

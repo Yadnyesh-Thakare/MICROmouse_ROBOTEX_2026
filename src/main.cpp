@@ -1,7 +1,7 @@
 /*
  * Micromouse: Enhanced Floodfill Robot (Optimized for Narrow Corridors)
  * Modified with 31-second timer and mode selection for wall following
- * Tailored for ESP32 with TB6612FNG, dual APDS9960 sensors, and N20 encoders.
+ * Tailored for ESP32 with TB6612FNG, tripel VL53 sensors, and N20 encoders.
  * Optimized for 18cm corridors with 15cm robot width.
  *
  * IMPORTANT: You MUST calibrate the values in the "Robot Physical Constants"
@@ -16,19 +16,6 @@
 #include <Adafruit_VL53L0X.h>
 #include <ESP32Encoder.h>
 
-// =================================================================
-// ============== CONFIGURABLE START & GOAL SETTINGS ===============
-// =================================================================
-// --- SET YOUR START POSITION AND HEADING HERE ---
-#define START_X 0
-#define START_Y 0
-#define START_HEADING NORTH // Can be NORTH, EAST, SOUTH, or WEST
-
-// --- SET YOUR GOAL CELLS HERE ---
-// For an 8x8 maze, a common goal is the center: {{3,3}, {3,4}, {4,3}, {4,4}}.
-struct Point { int x; int y; };
-const Point goalCells[] = {{15, 15}};
-const int numGoalCells = sizeof(goalCells) / sizeof(Point);
 
 // =================================================================
 // ================= TIMING AND MODE SELECTION ====================
@@ -55,12 +42,6 @@ WallFollowMode selectedMode = ONLY_RIGHT_WALL;
 unsigned int proxL;
 unsigned int proxR;
 float frontVal;
-
-const int trigPin = 0;
-const int echoPin = 18;
-
-
-#define SENSOR_TIMEOUT 30000
 
 // --- Hardware Objects ---
 Motor motorLeft = Motor(AIN1, AIN2, PWMA, 1, STBY_PIN);
@@ -91,7 +72,6 @@ const float CM_PER_TICK = (PI * WHEEL_DIAMETER_CM) / ENCODER_CPR;
 const int BASE_SPEED = 130;
 const int TURN_SPEED = 100;
 const int FAST_TURN_SPEED = 75;
-const float MOTOR_CORRECTION = 0.97;
 
 // --- OPTIMIZED ENCODER PID PARAMETERS ---
 float encoderKp = 0.7, encoderKi = 0.005, encoderKd = 0.15;
@@ -136,7 +116,7 @@ SpeedProfile explorationProfile =
 // Fast run modes
 SpeedProfile fastProfile; // Global variable to hold the selected fast profile
 
-// Profile A (for B_1 press)
+// Profile A (for BTNL press)
 SpeedProfile fastProfileA = 
 {
     150, // startSpeed - Reduced from 160 for safety in narrow corridors
@@ -146,7 +126,7 @@ SpeedProfile fastProfileA =
     0.4 // smoothingFactor - Less smoothing for speed
 };
 
-// Profile B (for B_2 press)
+// Profile B (for BTNR press)
 SpeedProfile fastProfileB = 
 {
     120, // startSpeed - Reduced from 160 for safety in narrow corridors
@@ -160,12 +140,25 @@ SpeedProfile fastProfileB =
 // --- Sensor Calibration ---
 const int LEFT_WALL_THRESHOLD = 135;
 const int RIGHT_WALL_THRESHOLD = 135;
-const int FRONT_WALL_THRESHOLD = 265;
+const int FRONT_WALL_THRESHOLD = 135;
 int RIGHT_WALL_TARGET = 95;
 int LEFT_WALL_TARGET = 95;
 
-// --- Global State & Maze Variables ---
+// =================================================================
+// ============== CONFIGURABLE START & GOAL SETTINGS ===============
+// =================================================================
+// --- SET YOUR START POSITION AND HEADING HERE ---
+#define START_X 0
+#define START_Y 0
+#define START_HEADING NORTH // Can be NORTH, EAST, SOUTH, or WEST
 
+// --- SET YOUR GOAL CELLS HERE ---
+// For an 8x8 maze, a common goal is the center: {{3,3}, {3,4}, {4,3}, {4,4}}.
+struct Point { int x; int y; };
+const Point goalCells[] = {{15, 15}};
+const int numGoalCells = sizeof(goalCells) / sizeof(Point);
+
+// --- Global State & Maze Variables ---
 const int GRID_SIZE = 15;
 int distMap[GRID_SIZE][GRID_SIZE];
 uint8_t wallsMap[GRID_SIZE][GRID_SIZE];
@@ -192,23 +185,19 @@ enum ProgramState
 };
 ProgramState currentState = FOLLOW_LEFT;
 
-#define B_1 13
-#define B_2 2
 
 // Button debouncing variables
 unsigned long lastButton1Press = 0;
 unsigned long lastButton2Press = 0;
 const unsigned long DEBOUNCE_DELAY = 10; // 250ms debounce delay
 
-/////////////////WALL FOLLOW DECLARATIONS/////////////
 long duration;
-float distanceCm;
-int WF_FRONT_WALL_THRESHOLD = 110; // mm threshold for front block
+int WF_FRONT_WALL_THRESHOLD = 135; // mm threshold for front block
 
 // --- Global readings (APDS mapped 0..500; ultrasonic cm as float)
 // --- Right-wall PID (single loop)
 // --- Targets and thresholds
-int WALL_TARGET = 58; // Increased for better wall tracking
+int WALL_TARGET = 95; // Increased for better wall tracking
 #define WALL_THRESHOLD 135 // proxR > this => right wall present
 
 float WF_wallKp = 1.5, WF_wallKi = 0.01, WF_wallKd = 8.0;
@@ -276,7 +265,8 @@ bool checkButton(int buttonPin, unsigned long &lastPressTime);
 void selectFastRunMode();
 
 // ------------------- Setup -------------------
-void setup() {
+void setup() 
+{
     Serial.begin(115200);
     delay(1000);
     Serial.println("Micromouse Hardware Mode Initializing...");
@@ -307,8 +297,8 @@ void setup() {
     
     computeFloodfill(goalCells[0].x, goalCells[0].y);
     
-    pinMode(B_1, INPUT_PULLUP);
-    pinMode(B_2, INPUT_PULLUP);
+    pinMode(BTNL, INPUT_PULLDOWN);
+    pinMode(BTNR, INPUT_PULLDOWN);
     
     Serial.println("=== ROBOT MODE SELECTION ===");
     Serial.println("Button 1: Start Right Wall Follow (with 31s timer)");
@@ -317,7 +307,8 @@ void setup() {
     
     // Initial mode selection
     while(1) {
-        if(checkButton(B_1, lastButton1Press)) {
+        if(checkButton(BTNL, lastButton1Press)) 
+        {
             digitalWrite(LEDR, HIGH);
             digitalWrite(LEDL, HIGH);
             delay(500);
@@ -327,12 +318,13 @@ void setup() {
             // Select wall follow mode after timer expires
             followRightWall();
             
-            currentState = FOLLOW_LEFT;
+            currentState = FOLLOW_LEFT; //! can be set as Right or Left wall follow 
             
-            Serial.println("Started: 31-second Right Wall Follow with timer");
+            Serial.println("Started: 31-second Right or Left Wall Follow with timer");
             break;
         }
-        if(checkButton(B_2, lastButton2Press)) {
+        if(checkButton(BTNR, lastButton2Press)) 
+        {
             digitalWrite(LEDR, HIGH);
             digitalWrite(LEDL, HIGH);
             delay(500);
@@ -355,27 +347,8 @@ void loop()
     senseWallsAtCurrentCell();
     updateYAW();
     readAllSensors();
-
-
-    // switch (currentState) {
-    //     case FOLLOW_LEFT:
-    //         followRightWall();
-    //         break;
-    //     case EXPLORING:
-    //         runExploration();
-    //         break;
-    //     case AWAITING_FAST_RUN:
-    //         currentState = FAST_RUN; // Auto-start fast run for testing
-    //         break;
-    //     case FAST_RUN:
-    //         performFastRun();
-    //         currentState = FOLLOW_LEFT;
-    //         break;
-    //     case FINISHED:
-    //         stopMotors();
-    //         delay(1000);
-    //         break;
-    // }
+    moveForwardOneCell();
+    
 }
 
 // ================= NEW TIMER AND BUTTON FUNCTIONS =================
@@ -386,7 +359,8 @@ bool checkButton(int buttonPin, unsigned long &lastPressTime)
 {
     unsigned long currentTime = millis();
     
-    if (digitalRead(buttonPin) == HIGH && (currentTime - lastPressTime) > DEBOUNCE_DELAY) {
+    if (digitalRead(buttonPin) == HIGH && (currentTime - lastPressTime) > DEBOUNCE_DELAY) 
+    {
         lastPressTime = currentTime;
         return true;
     }
@@ -407,7 +381,7 @@ void selectFastRunMode()
     delay(500);
     
     while(1) {
-        if(checkButton(B_1, lastButton1Press)) {
+        if(checkButton(BTNL, lastButton1Press)) {
             fastProfile = fastProfileA;
             Serial.println("Selected: Normal Fast Run Profile.");
             digitalWrite(LEDR, HIGH);
@@ -415,7 +389,7 @@ void selectFastRunMode()
             digitalWrite(LEDR, LOW);
             break;
         }
-        if(checkButton(B_2, lastButton2Press)) {
+        if(checkButton(BTNR, lastButton2Press)) {
             fastProfile = fastProfileB;
             Serial.println("Selected: Slower Fast Run Profile.");
             digitalWrite(LEDL, HIGH);
@@ -562,7 +536,7 @@ void stopMotors()
 void setMotorSpeeds(int leftSpeed, int rightSpeed) 
 {
     motorLeft.drive(leftSpeed);
-    motorRight.drive(rightSpeed * MOTOR_CORRECTION);
+    motorRight.drive(rightSpeed);
 }
 
 void readAllSensors() 
@@ -1218,7 +1192,7 @@ void runExploration() {
         delay(1000);
         
         while(1){
-            if(checkButton(B_1, lastButton1Press)){
+            if(checkButton(BTNL, lastButton1Press)){
                 digitalWrite(LEDR, HIGH);
                 digitalWrite(LEDL, HIGH);
                 delay(1000);
