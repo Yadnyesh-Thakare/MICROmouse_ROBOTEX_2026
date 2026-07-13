@@ -2,11 +2,14 @@
  * Micromouse: Enhanced Floodfill Robot (Optimized for Narrow Corridors)
  * Modified with 31-second timer and mode selection for wall following
  * Tailored for ESP32 with TB6612FNG, tripel VL53 sensors, and N20 encoders.
- * Optimized for 18cm corridors with 15cm robot width.
+ * Optimized for 18cm corridors with 11cm robot width.
  *
  * IMPORTANT: You MUST calibrate the values in the "Robot Physical Constants"
  * and "Sensor Calibration" sections for your robot to work correctly.
  */
+
+
+
 #include <Arduino.h>
 #include <Wire.h> // For I2C communication
 #include <SparkFun_TB6612.h> // For the motor driver
@@ -17,149 +20,137 @@
 #include <ESP32Encoder.h>
 
 
-// =================================================================
-// ================= TIMING AND MODE SELECTION ====================
-// =================================================================
+//! Seansor variables --------------------------------------------------
 
-// Timer constants
-const unsigned long WALL_FOLLOW_TIMER_DURATION = 5000; // 31 = 31000 seconds in milliseconds
-unsigned long wallFollowStartTime = 0;
-bool timerActive = false;
-
-// Wall follow mode selection
-enum WallFollowMode 
-{
-    ONLY_RIGHT_WALL, // Continue with right wall follow only
-    SWITCH_TO_LEFT_WALL, // Switch to left wall follow after timer
-    LEFT_WALL_ONLY // Only left wall follow (direct selection)
-};
-WallFollowMode selectedMode = ONLY_RIGHT_WALL;
-
-// =================================================================
-// =================================================================
-
-// Global variables to hold sensor readings
+//* Global variables to hold sensor readings
 unsigned int proxL;
 unsigned int proxR;
-float frontVal;
+unsigned int frontVal;
 
-// --- Hardware Objects ---
+//* Create data structures to hold the measurements
+Adafruit_VL53L0X sensorCenter = Adafruit_VL53L0X();
+Adafruit_VL53L0X sensorLeft   = Adafruit_VL53L0X();
+Adafruit_VL53L0X sensorRight  = Adafruit_VL53L0X();
+
+//! Motor variables ---------------------------------------------------
+
 Motor motorLeft = Motor(AIN1, AIN2, PWMA, 1, STBY_PIN);
 Motor motorRight = Motor(BIN1, BIN2, PWMB, 1, STBY_PIN);
 
 ESP32Encoder leftEncoderCount;
 ESP32Encoder rightEncoderCount;
 
-// Create data structures to hold the measurements
-Adafruit_VL53L0X sensorCenter = Adafruit_VL53L0X();
-Adafruit_VL53L0X sensorLeft   = Adafruit_VL53L0X();
-Adafruit_VL53L0X sensorRight  = Adafruit_VL53L0X();
-
-
-// --- Robot Physical Constants ---
-const float WHEEL_DIAMETER_CM = 5.0;
-const float WHEEL_SEPARATION_CM = 10.0;
-const int ENCODER_CPR = 280;
-const float CM_PER_TICK = (PI * WHEEL_DIAMETER_CM) / ENCODER_CPR;
-#define CELL_DISTANCE_CM 18.0
-
-// --- Movement & Control Parameters (ENHANCED) ---
-#define TURN_DEGREES_90 95
-#define TURN_DEGREES_180 195
-#define FAST_TURN_DEGREES_90 105
-#define FAST_TURN_DEGREES_180 189
-
-const int BASE_SPEED = 130;
-const int TURN_SPEED = 100;
-const int FAST_TURN_SPEED = 75;
-
-// --- OPTIMIZED ENCODER PID PARAMETERS ---
-float encoderKp = 0.7, encoderKi = 0.005, encoderKd = 0.15;
-float encoderError = 0, encoderPrev = 0, encoderInt = 0;
-float encoderPIDValue = 0;
-
-// --- OPTIMIZED WALL PID PARAMETERS ---
-// float wallKp = 1.5, wallKi = 0.02, wallKd = 12.0; // Single wall
-
-float wallKp = 1.5, wallKi = 0.01, wallKd = 8.0; 
-float wallKpDual = 1.8, wallKiDual = 0.01, wallKdDual = 8.0; // Dual wall
-float wallError = 0, wallPrev = 0, wallInt = 0;
-float wallPIDValue = 0;
-
-#define MAX_INTEGRAL 25 // Reduced for better stability
-
-// MPU6050 GYROSCOPE FUNCTIONS
+//! MPU6050 GYROSCOPE Parameters --------------------------------------
 float gyroBiasZ = 0.0;  // stored in dps
 float yaw = 0.0;
 unsigned long lastUpdate = 0;
 
-// --- Enhanced Sigmoidal Speed Parameters ---
-struct SpeedProfile 
-{
-    int startSpeed;
-    int endSpeed; 
-    float sigmoidScale;
-    float transitionPoint; // Where to switch from accel to decel
-    float smoothingFactor; // Additional smoothing
-};
+//! Button variables --------------------------------------------------
 
-// Exploration mode (safer for narrow corridors)
-SpeedProfile explorationProfile = 
-{
-    80, // startSpeed - Reduced for tight spaces
-    50, // endSpeed - Lower for precise stopping
-    8.0, // sigmoidScale - Moderate transition steepness
-    0.55, // transitionPoint - Start slowing at 60% of distance
-    0.3 // smoothingFactor - Additional velocity smoothing
-};
+unsigned long lastButton1Press = 0;
+unsigned long lastButton2Press = 0;
+const unsigned long DEBOUNCE_DELAY = 10; // 10ms debounce delay
 
-// Fast run modes
-SpeedProfile fastProfile; // Global variable to hold the selected fast profile
+//! Robot Physical Constants ------------------------------------------
 
-// Profile A (for BTNL press)
-SpeedProfile fastProfileA = 
-{
-    150, // startSpeed - Reduced from 160 for safety in narrow corridors
-    110, // endSpeed - Still controlled ending
-    25.0, // sigmoidScale - Sharper transitions
-    0.33, // transitionPoint - Later deceleration
-    0.4 // smoothingFactor - Less smoothing for speed
-};
+const float WHEEL_DIAMETER_CM = 50.0;
+const float WHEEL_SEPARATION_CM = 100.0;
+const int ENCODER_CPR = 1400;   //* for (leftEncoderCount.attachHalfQuad(ENCL_A, ENCL_B)) 
+                                //*as we are taking half reading 
+                                //* for full use 2800
+const float CM_PER_TICK = (PI * WHEEL_DIAMETER_CM) / ENCODER_CPR;
 
-// Profile B (for BTNR press)
-SpeedProfile fastProfileB = 
-{
-    120, // startSpeed - Reduced from 160 for safety in narrow corridors
-    100, // endSpeed - Still controlled ending
-    20.0, // sigmoidScale - Sharper transitions
-    0.33, // transitionPoint - Later deceleration
-    0.4 // smoothingFactor - Less smoothing for speed
-};
+//! Sensor Thresholds -------------------------------------------------
 
+//* Used in moveforwaronecell , moveforwaronecellFast and wallpid 
 
-// --- Sensor Calibration ---
-const int LEFT_WALL_THRESHOLD = 135;
-const int RIGHT_WALL_THRESHOLD = 135;
-const int FRONT_WALL_THRESHOLD = 135;
+const int LEFT_WALL_THRESHOLD = 155;
+const int RIGHT_WALL_THRESHOLD = 160;
+const int FRONT_WALL_THRESHOLD = 110;
 int RIGHT_WALL_TARGET = 95;
 int LEFT_WALL_TARGET = 95;
 
-// =================================================================
-// ============== CONFIGURABLE START & GOAL SETTINGS ===============
-// =================================================================
-// --- SET YOUR START POSITION AND HEADING HERE ---
+//! Turning angle variables -------------------------------------------
+
+//* used in executeMoveToFast and executeMoveTo
+
+#define TURN_DEGREES_90 90
+#define TURN_DEGREES_180 180
+#define FAST_TURN_DEGREES_90 90
+#define FAST_TURN_DEGREES_180 180
+
+//! Turn parameter ----------------------------------------------------
+
+//* Used in FollowRightWall and FollowLeftWall function 
+//* In MoveForwardOneCell and MoveForwardOneCellFast function directuly turn funtion is used
+
+int ARC_SPEED_OUTER = 160; // Reduced difference for stability
+int ARC_SPEED_INNER = 69; // Closer speeds = smoother arc
+int PID_ARC_CLAMP = 25; // Reduced clamp for precision
+
+
+int SPIN_SPEED = 100; //* for U-turn 
+
+//! Speed parameters --------------------------------------------------
+
+const int BASE_SPEED = 150; //* not used insted of it WF_Base_speed is used in Rightwallfollw and Leftwallfollow 
+const int TURN_SPEED = 120; //* used in turn function and executeMoveTo
+const int FAST_TURN_SPEED = 180; //* used in executeMoveToFast
+
+//! ENCODER PID Parameters --------------------------------------------
+
+float encoderKp    = 0.7, encoderKi   = 0.005, encoderKd   = 0.15; //* used in encoderPID
+float encoderError = 0,   encoderInt  = 0,     encoderPrev = 0;
+float encoderPIDValue = 0;
+
+//! Wall PID Parameters -----------------------------------------------
+
+float wallKp     = 1.5, wallKi     = 0.01, wallKd     = 8.0; //* used in wallpid function 
+float wallKpDual = 1.8, wallKiDual = 0.01, wallKdDual = 8.0; //* used in wallpid function  (Dual wall)
+float wallError  = 0,   wallInt    = 0,    wallPrev   = 0;    
+float wallPIDValue = 0;
+
+#define MAX_INTEGRAL 25 // Reduced for better stability
+
+//! WF_(wall follow) Sensor Thresholds , PID , Speed -------------------------------
+
+//* used in Rightwallfollw and Leftwallfollow
+
+int WF_FRONT_WALL_THRESHOLD = 70; 
+int WALL_TARGET = 95; 
+#define WALL_THRESHOLD 135 
+
+float WF_wallKp = 1.5, WF_wallKd = 8.0, WF_wallKi = 0.01; 
+#define WF_MAX_INTEGRAL 25
+
+int WF_BASE_SPEED = 140; // base speed
+
+//! PID weight distribution -------------------------------------------
+
+const float encoderWeight = 0.35; // Reduced encoder influence
+const float wallWeight = 0.65; // Increased wall influence
+
+const float encoderWeight_F = 0.27; //for fast function 
+const float wallWeight_F = 0.73;
+
+//! Maze Parameters -------------------------------------------------
+
+//* SET YOUR CELL DISTANCE
+#define CELL_DISTANCE_CM 18.0
+
+//* SET YOUR START POSITION AND HEADING HERE 
 #define START_X 0
 #define START_Y 0
 #define START_HEADING NORTH // Can be NORTH, EAST, SOUTH, or WEST
 
-// --- SET YOUR GOAL CELLS HERE ---
-// For an 8x8 maze, a common goal is the center: {{3,3}, {3,4}, {4,3}, {4,4}}.
+//* SET YOUR GOAL CELLS HERE 
+
 struct Point { int x; int y; };
-const Point goalCells[] = {{15, 15}};
+const Point goalCells[] = {{4,4},{3,4},{4,3},{3,3}};  //* For an 8x8 maze, a common goal is the center: {{3,3}, {3,4}, {4,3}, {4,4}}.
 const int numGoalCells = sizeof(goalCells) / sizeof(Point);
 
-// --- Global State & Maze Variables ---
-const int GRID_SIZE = 15;
+//* Global State & Maze Variables 
+const int GRID_SIZE = 8;              //* set your grid size here  
 int distMap[GRID_SIZE][GRID_SIZE];
 uint8_t wallsMap[GRID_SIZE][GRID_SIZE];
 bool visited[GRID_SIZE][GRID_SIZE];
@@ -174,97 +165,155 @@ enum Heading { NORTH = 0, EAST = 1, SOUTH = 2, WEST = 3 };
 int robotX = 0, robotY = 0;
 Heading robotHeading = EAST;
 
-// Modified Program States to include timed wall following
+//! Timer constants ---------------------------------------------------
+
+const unsigned long WALL_FOLLOW_TIMER_DURATION = 5000; // 31 = 31000 seconds in milliseconds
+unsigned long wallFollowStartTime = 0;
+bool timerActive = false;
+
+//! Different profiles ------------------------------------------------
+
+//* --- Enhanced Sigmoidal Speed Parameters ---------------------------
+struct SpeedProfile 
+{
+    int startSpeed;
+    int endSpeed; 
+    float sigmoidScale;
+    float transitionPoint; // Where to switch from accel to decel
+    float smoothingFactor; // Additional smoothing
+};
+
+
+
+//* Exploration mode (safer for narrow corridors)----------------------
+SpeedProfile explorationProfile = 
+{
+    150, // startSpeed - Reduced for tight spaces
+    80, // endSpeed - Lower for precise stopping
+    8.0, // sigmoidScale - Moderate transition steepness
+    0.55, // transitionPoint - Start slowing at 60% of distance
+    0.3 // smoothingFactor - Additional velocity smoothing
+};
+
+
+
+//* Profile A (for on the spot speed changer)--------------------------
+SpeedProfile fastProfileA = 
+{
+    150, // startSpeed - Reduced from 160 for safety in narrow corridors
+    110, // endSpeed - Still controlled ending
+    25.0, // sigmoidScale - Sharper transitions
+    0.33, // transitionPoint - Later deceleration
+    0.4 // smoothingFactor - Less smoothing for speed
+};
+
+
+
+//* Profile B (for on the spot speed changer)--------------------------
+SpeedProfile fastProfileB = 
+{
+    120, // startSpeed - Reduced from 160 for safety in narrow corridors
+    100, // endSpeed - Still controlled ending
+    20.0, // sigmoidScale - Sharper transitions
+    0.33, // transitionPoint - Later deceleration
+    0.4 // smoothingFactor - Less smoothing for speed
+};
+
+SpeedProfile fastProfile;       //! Global variable to hold the selected speed profile
+
+
+
+
+//* Profile for action used in maze -----------------------------------
 enum ProgramState 
 {
     FOLLOW_LEFT, // Continuous left wall follow 
+    FOLLOW_RIGHT, //Continious right wall follow 7
     EXPLORING, 
     AWAITING_FAST_RUN, 
     FAST_RUN, 
     FINISHED 
 };
-ProgramState currentState = FOLLOW_LEFT;
+ProgramState currentState = FOLLOW_LEFT;  //! Global variable to hold the selected ProgramState mode
 
 
-// Button debouncing variables
-unsigned long lastButton1Press = 0;
-unsigned long lastButton2Press = 0;
-const unsigned long DEBOUNCE_DELAY = 10; // 250ms debounce delay
 
-long duration;
-int WF_FRONT_WALL_THRESHOLD = 135; // mm threshold for front block
+//* Wall follow mode selection ----------------------------------------
+enum WallFollowMode 
+{
+    ONLY_RIGHT_WALL, // Continue with right wall follow only
+    SWITCH_TO_LEFT_WALL, // Switch to left wall follow after timer
+    LEFT_WALL_ONLY // Only left wall follow (direct selection)
+};
+WallFollowMode selectedMode = ONLY_RIGHT_WALL;  //! Global variable to hold the selected WallFollowMode
 
-// --- Global readings (APDS mapped 0..500; ultrasonic cm as float)
-// --- Right-wall PID (single loop)
-// --- Targets and thresholds
-int WALL_TARGET = 95; // Increased for better wall tracking
-#define WALL_THRESHOLD 135 // proxR > this => right wall present
 
-float WF_wallKp = 1.5, WF_wallKi = 0.01, WF_wallKd = 8.0;
-#define WF_MAX_INTEGRAL 25
 
-// --- Motion base
-int WF_BASE_SPEED = 140; // Slightly reduced for stability
-
-// --- Right-wall reacquire arc
-int ARC_SPEED_OUTER = 160; // Reduced difference for stability
-int ARC_SPEED_INNER = 69; // Closer speeds = smoother arc
-int PID_ARC_CLAMP = 25; // Reduced clamp for precision
-
-// --- Spin Parameters (NEW) ---
-int SPIN_SPEED = 100; // Moderate speed for control
-int SPIN_DURATION = 340; // Longer duration for proper turn
-
-// --- FSM states (minimal)
+//* FSM states (minimal) ----------------------------------------------
 enum TurnState 
 {
     NONE,
     LEFT_FIND_ALIGN,
     ARC_RIGHT_FIND
 };
-TurnState turnState = NONE;
+TurnState turnState = NONE;             //! Global variable to hold the selected TursnState mode
 unsigned long stateStart = 0;
 unsigned long leftAlignStart = 0;
 bool leftAlignStable = false;
 
-// --- Improved PID weight distribution ---
-const float encoderWeight = 0.35; // Reduced encoder influence
-const float wallWeight = 0.65; // Increased wall influence
+//! Function Prototypes -----------------------------------------------
 
-// --- Function Prototypes ---
-void computeFloodfill(int gx, int gy);
-void computeFloodfillVisited(int gx, int gy);
-void runExploration();
-void performFastRun();
-void pathReturnToStart();
 void attachHardware();
+void WKnC_MPU();
+void initsesor();
 void updateYAW();
-bool nextCellTowardsGoal(int &nx, int &ny);
-bool nextCellTowardsGoalFinal(int &nx, int &ny);
-void senseWallsAtCurrentCell();
-void executeMoveTo(int nx, int ny);
-void executeMoveToFast(int nx, int ny);
-void moveForwardOneCell();
-void moveForwardOneCellFast();
-void turn(float degrees, int speed);
-bool inBounds(int x, int y);
-void stopMotors();
 void readAllSensors();
-float readFrontSensor();
+bool checkButton(int buttonPin, unsigned long &lastPressTime);
+
 void IRAM_ATTR isrLeftEncoder();
 void IRAM_ATTR isrRightEncoder();
-void wallPID(unsigned int proxL, unsigned int proxR);
+
 void encoderPID();
-void setMotorSpeeds(int leftSpeed, int rightSpeed);
+void wallPID(unsigned int proxL, unsigned int proxR);
 void WF_wallPID_R(unsigned int proxR_);
 void WF_wallPID_L(unsigned int proxL_);
+
+void setMotorSpeeds(int leftSpeed, int rightSpeed);
+void stopMotors();
+void turn(float degrees, int speed);
+
+void senseWallsAtCurrentCell();
+
+void selectFastRunMode();
+void performFastRun();
+void pathReturnToStart();
+
 void followRightWall();
 void followLeftWall();
 void handleTimedWallFollow();
-bool checkButton(int buttonPin, unsigned long &lastPressTime);
-void selectFastRunMode();
 
-// ------------------- Setup -------------------
+void moveForwardOneCell();
+void moveForwardOneCellFast();
+
+void executeMoveTo(int nx, int ny);
+void executeMoveToFast(int nx, int ny);
+
+bool nextCellTowardsGoal(int &nx, int &ny);
+bool nextCellTowardsGoalFinal(int &nx, int &ny);
+
+bool inBounds(int x, int y);
+
+void computeFloodfill(int gx, int gy);
+void computeFloodfillVisited(int gx, int gy);
+void runExploration();
+
+
+
+//!=========================================-------===========================================
+//! ======================================-- Setup --=========================================
+//!=========================================-------===========================================
+
+
 void setup() 
 {
     Serial.begin(115200);
@@ -301,59 +350,72 @@ void setup()
     pinMode(BTNR, INPUT_PULLDOWN);
     
     Serial.println("=== ROBOT MODE SELECTION ===");
-    Serial.println("Button 1: Start Right Wall Follow (with 31s timer)");
-    Serial.println("Button 2: Start Exploration Mode");
-    Serial.println("Waiting for button press...");
+    // Serial.println("Button 1: Start Right Wall Follow (with 31s timer)");
+    // Serial.println("Button 2: Start Exploration Mode");
+    // Serial.println("Waiting for button press...");
     
-    // Initial mode selection
-    while(1) {
-        if(checkButton(BTNL, lastButton1Press)) 
-        {
-            digitalWrite(LEDR, HIGH);
-            digitalWrite(LEDL, HIGH);
-            delay(500);
-            digitalWrite(LEDR, LOW);
-            digitalWrite(LEDL, LOW);
+    // // Initial mode selection
+    // while(1) {
+    //     if(checkButton(BTNL, lastButton1Press)) 
+    //     {
+    //         digitalWrite(LEDR, HIGH);
+    //         digitalWrite(LEDL, HIGH);
+    //         delay(500);
+    //         digitalWrite(LEDR, LOW);
+    //         digitalWrite(LEDL, LOW);
             
-            // Select wall follow mode after timer expires
-            followRightWall();
+    //         // Select wall follow mode after timer expires
+    //         followLeftWall();
             
-            currentState = FOLLOW_LEFT; //! can be set as Right or Left wall follow 
+    //         currentState = FOLLOW_LEFT; //! can be set as Right or Left wall follow 
             
-            Serial.println("Started: 31-second Right or Left Wall Follow with timer");
-            break;
-        }
-        if(checkButton(BTNR, lastButton2Press)) 
-        {
-            digitalWrite(LEDR, HIGH);
-            digitalWrite(LEDL, HIGH);
-            delay(500);
-            digitalWrite(LEDR, LOW);
-            digitalWrite(LEDL, LOW);
+    //         Serial.println("Left wall follow");
+    //         break;
+    //     }  
+    //     if(checkButton(BTNR, lastButton2Press)) 
+    //     {
+    //         digitalWrite(LEDR, HIGH);
+    //         digitalWrite(LEDL, HIGH);
+    //         delay(500);
+    //         digitalWrite(LEDR, LOW);
+    //         digitalWrite(LEDL, LOW);
             
-            // Check for fast run mode selection before starting exploration
-            selectFastRunMode();
+    //         // Check for fast run mode selection before starting exploration
+    //         followRightWall();
             
-            currentState = EXPLORING;
-            Serial.println("Started: Exploration Mode");
-            break;
-        }
-    }
+    //         currentState = EXPLORING;
+    //         Serial.println("Right wall follow");
+    //         break;
+    //     }
+    // }
+    moveForwardOneCell();
 }
 
-// ------------------- Main loop -------------------
+
+//!=========================================-----------=======================================
+//! =====================================--- Main Loop ---====================================
+//!=========================================-----------=======================================
+
 void loop() 
 {   
-    senseWallsAtCurrentCell();
-    updateYAW();
-    readAllSensors();
-    moveForwardOneCell();
-    
+     senseWallsAtCurrentCell();
+     readAllSensors();
 }
 
-// ================= NEW TIMER AND BUTTON FUNCTIONS =================
 
 
+
+
+
+
+
+
+//? ====================================================================================================================================
+//!                                                   [[[[[  FUNCTIONS ]]]]]]                                                                                                   
+//? ====================================================================================================================================
+
+
+//*-------------------------------------------------  BUTTON FUNCTIONS  --------------------------------------------------------------- 
 
 bool checkButton(int buttonPin, unsigned long &lastPressTime) 
 {
@@ -368,7 +430,8 @@ bool checkButton(int buttonPin, unsigned long &lastPressTime)
 }
 
 
-// Function to select the fast run speed profile
+//*-------------------------------------  Function to select the fast run speed profile  -----------------------------------------------
+
 void selectFastRunMode() 
 {
     Serial.println("\n=== SELECT FAST RUN PROFILE ===");
@@ -404,11 +467,8 @@ void selectFastRunMode()
     }
     delay(500);
 }
-
-// =================================================================
-// ================= HARDWARE-SPECIFIC FUNCTIONS ===================
-// =================================================================
-
+//!                                                     HARDWARE-SPECIFIC FUNCTIONS
+//! ====================================================================================================================================
 
 void initSensors() 
 {
@@ -440,6 +500,8 @@ void initSensors()
 
   Serial.println("All sensors initialised.");
 }
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void WKnC_MPU() 
 {
@@ -473,6 +535,8 @@ void WKnC_MPU()
   Serial.println(gyroBiasZ);
 }
 
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
 void updateYAW() 
 {
   if (micros() - lastUpdate >= 1000) {
@@ -499,8 +563,13 @@ void updateYAW()
   }
 }
 
+//* -------------------------------------------------  Main hardware attach function ---------------------------------------------------
+
 void attachHardware() 
 {
+    digitalWrite(LEDL, LOW);
+    digitalWrite(LEDL, LOW);
+
     Wire.begin();
 
     pinMode(STBY_PIN, OUTPUT);
@@ -524,8 +593,16 @@ void attachHardware()
 
     Serial.println("All sensors initialised.");
     Serial.println("Hardware attached.");
+
+    digitalWrite(LEDL, HIGH);
+    digitalWrite(LEDL, HIGH);
+    delay(300);
+    digitalWrite(LEDL, LOW);
+    digitalWrite(LEDL, LOW);
+    delay(100);
 }
 
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void stopMotors() 
 {
@@ -533,11 +610,15 @@ void stopMotors()
     motorRight.brake();
 }
 
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
 void setMotorSpeeds(int leftSpeed, int rightSpeed) 
 {
     motorLeft.drive(leftSpeed);
     motorRight.drive(rightSpeed);
 }
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void readAllSensors() 
 {
@@ -552,6 +633,9 @@ void readAllSensors()
     frontVal = (mCenter.RangeStatus != 4) ? mCenter.RangeMilliMeter : 800;
     proxR  = (mRight.RangeStatus  != 4) ? mRight.RangeMilliMeter  : 200;
 }
+
+//!                                                 Check surrounding wall at cell 
+//! ====================================================================================================================================
 
 void senseWallsAtCurrentCell() 
 {
@@ -600,6 +684,80 @@ void senseWallsAtCurrentCell()
     if ((cellWalls & WALL_W) && inBounds(robotX - 1, robotY)) wallsMap[robotY][robotX - 1] |= WALL_E;
 }
 
+//!                                                     PID functions
+//! ====================================================================================================================================
+
+void WF_wallPID_R(unsigned int proxR_) 
+{
+    wallError =  WALL_TARGET - (float)proxR_;
+    
+    // Integral with windup protection
+    wallInt += wallError;
+    wallInt = constrain(wallInt, -WF_MAX_INTEGRAL, WF_MAX_INTEGRAL);
+    
+    float wallDeriv = wallError - wallPrev;
+    wallPrev = wallError;
+    wallPIDValue = WF_wallKp * wallError + WF_wallKi * wallInt + WF_wallKd * wallDeriv;
+}
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+void WF_wallPID_L(unsigned int proxL_) 
+{
+    wallError = - (float)proxL_ - WALL_TARGET; 
+    
+    // Integral with windup protection
+    wallInt += wallError;
+    wallInt = constrain(wallInt, -WF_MAX_INTEGRAL, WF_MAX_INTEGRAL);
+    
+    float wallDeriv = wallError - wallPrev;
+    wallPrev = wallError;
+    wallPIDValue = WF_wallKp * wallError + WF_wallKi * wallInt + WF_wallKd * wallDeriv;
+}
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+// Enhanced Wall PID with adaptive parameters
+void wallPID(unsigned int proxL, unsigned int proxR) {
+    bool hasBothWalls = (proxL < LEFT_WALL_THRESHOLD && proxR < RIGHT_WALL_THRESHOLD);
+    
+    // Use different parameters for single vs dual wall scenarios
+    float currentKp = hasBothWalls ? wallKpDual : wallKp;
+    float currentKi = hasBothWalls ? wallKiDual : wallKi; 
+    float currentKd = hasBothWalls ? wallKdDual : wallKd;
+    
+    wallError = -(int)proxR + (int)proxL;
+    wallInt += wallError;
+    wallInt = constrain(wallInt, -MAX_INTEGRAL, MAX_INTEGRAL);
+    
+    float wallDeriv = wallError - wallPrev;
+    wallPrev = wallError;
+    
+    wallPIDValue = currentKp * wallError + currentKi * wallInt + currentKd * wallDeriv;
+}
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+// Enhanced Encoder PID with integral windup protection
+void encoderPID() 
+{
+    encoderError = leftEncoderCount.getCount() - rightEncoderCount.getCount();
+    
+    // Integral windup protection
+    if (abs(encoderPIDValue) < 100) { // Only accumulate when output isn't saturated
+        encoderInt += encoderError;
+        encoderInt = constrain(encoderInt, -MAX_INTEGRAL, MAX_INTEGRAL);
+    }
+    
+    float encoderDeriv = encoderError - encoderPrev;
+    encoderPrev = encoderError;
+    
+    encoderPIDValue = encoderKp * encoderError + encoderKi * encoderInt + encoderKd * encoderDeriv;
+}
+
+
+//!                                                     follow wall
+//! ====================================================================================================================================
 
 void followRightWall()
 {
@@ -634,6 +792,8 @@ void followRightWall()
         setMotorSpeeds(leftSpeed, rightSpeed);
     }
 }
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void followLeftWall()
 {
@@ -670,67 +830,8 @@ void followLeftWall()
     }
 }
 
-void WF_wallPID_R(unsigned int proxR_) 
-{
-    wallError =  WALL_TARGET - (float)proxR_;
-    
-    // Integral with windup protection
-    wallInt += wallError;
-    wallInt = constrain(wallInt, -WF_MAX_INTEGRAL, WF_MAX_INTEGRAL);
-    
-    float wallDeriv = wallError - wallPrev;
-    wallPrev = wallError;
-    wallPIDValue = WF_wallKp * wallError + WF_wallKi * wallInt + WF_wallKd * wallDeriv;
-}
-
-void WF_wallPID_L(unsigned int proxL_) 
-{
-    wallError = - (float)proxL_ - WALL_TARGET; 
-    
-    // Integral with windup protection
-    wallInt += wallError;
-    wallInt = constrain(wallInt, -WF_MAX_INTEGRAL, WF_MAX_INTEGRAL);
-    
-    float wallDeriv = wallError - wallPrev;
-    wallPrev = wallError;
-    wallPIDValue = WF_wallKp * wallError + WF_wallKi * wallInt + WF_wallKd * wallDeriv;
-}
-
-// Enhanced Wall PID with adaptive parameters
-void wallPID(unsigned int proxL, unsigned int proxR) {
-    bool hasBothWalls = (proxL > LEFT_WALL_THRESHOLD && proxR > RIGHT_WALL_THRESHOLD);
-    
-    // Use different parameters for single vs dual wall scenarios
-    float currentKp = hasBothWalls ? wallKpDual : wallKp;
-    float currentKi = hasBothWalls ? wallKiDual : wallKi; 
-    float currentKd = hasBothWalls ? wallKdDual : wallKd;
-    
-    wallError = -(int)proxR + (int)proxL;
-    wallInt += wallError;
-    wallInt = constrain(wallInt, -MAX_INTEGRAL, MAX_INTEGRAL);
-    
-    float wallDeriv = wallError - wallPrev;
-    wallPrev = wallError;
-    
-    wallPIDValue = currentKp * wallError + currentKi * wallInt + currentKd * wallDeriv;
-}
-
-// Enhanced Encoder PID with integral windup protection
-void encoderPID() 
-{
-    encoderError = leftEncoderCount.getCount() - rightEncoderCount.getCount();
-    
-    // Integral windup protection
-    if (abs(encoderPIDValue) < 100) { // Only accumulate when output isn't saturated
-        encoderInt += encoderError;
-        encoderInt = constrain(encoderInt, -MAX_INTEGRAL, MAX_INTEGRAL);
-    }
-    
-    float encoderDeriv = encoderError - encoderPrev;
-    encoderPrev = encoderError;
-    
-    encoderPIDValue = encoderKp * encoderError + encoderKi * encoderInt + encoderKd * encoderDeriv;
-}
+//!                                                     Move forward one cell
+//! ====================================================================================================================================
 
 void moveForwardOneCell() 
 {
@@ -738,115 +839,110 @@ void moveForwardOneCell()
     
     leftEncoderCount.clearCount();
     rightEncoderCount.clearCount();
-    
-    // Use exploration profile for narrow corridors
-    SpeedProfile profile = explorationProfile;
-    
-    // Dynamic speed variables
+
+    // Clear PID history variables upon entry
+    wallInt = 0; wallPrev = 0;
+    encoderInt = 0; encoderPrev = 0;
+
+    SpeedProfile profile = fastProfile;
     int currentSpeed = profile.startSpeed;
     int previousSpeed = profile.startSpeed;
-    
-    while (true) {
-        long avgTicks = (leftEncoderCount.getCount() + rightEncoderCount.getCount())/2;
+
+    while (true) 
+    {
+        long avgTicks = (leftEncoderCount.getCount() + rightEncoderCount.getCount()) / 2;
         if (avgTicks >= targetTicks) break;
-        
+
         float progress = (float)avgTicks / (float)targetTicks;
-        
-        // --- ENHANCED DUAL-PHASE SIGMOIDAL CONTROL ---
+
         int dynamicSpeed;
-        
-        if (progress <= profile.transitionPoint) {
-            // Acceleration phase - smooth startup
+        if (progress <= profile.transitionPoint) 
+        {
             float accelProgress = progress / profile.transitionPoint;
             float sigmoidInput = profile.sigmoidScale * (accelProgress - 0.5);
             float sigmoidOutput = 1.0 / (1.0 + exp(-sigmoidInput));
             dynamicSpeed = profile.endSpeed + (int)((profile.startSpeed - profile.endSpeed) * sigmoidOutput);
-        } else {
-            // Deceleration phase - smooth stopping
+        } 
+        else 
+        {
             float decelProgress = (progress - profile.transitionPoint) / (1.0 - profile.transitionPoint);
-            
-            // Enhanced S-curve deceleration
             float sigmoidInput = profile.sigmoidScale * (0.5 - decelProgress);
             float sigmoidOutput = 1.0 / (1.0 + exp(-sigmoidInput));
             dynamicSpeed = profile.endSpeed + (int)((profile.startSpeed - profile.endSpeed) * sigmoidOutput);
         }
-        
-        // --- VELOCITY SMOOTHING FOR NARROW CORRIDORS ---
-        currentSpeed = (int)(profile.smoothingFactor * previousSpeed + 
-                             (1.0 - profile.smoothingFactor) * dynamicSpeed);
+
+        currentSpeed = (int)(profile.smoothingFactor * previousSpeed + (1.0 - profile.smoothingFactor) * dynamicSpeed);
         currentSpeed = constrain(currentSpeed, profile.endSpeed, profile.startSpeed);
         previousSpeed = currentSpeed;
-        
-        // Early stopping for front obstacles (critical in narrow spaces)
+
         readAllSensors();
-        if (frontVal < 4) break; // Tighter stopping distance
-        
-        // --- ENHANCED WALL PID FOR NARROW CORRIDORS ---
+        if (frontVal < 8) break; 
+
         wallPIDValue = 0;
-        bool hasLeftWall = proxL > LEFT_WALL_THRESHOLD;
-        bool hasRightWall = proxR > RIGHT_WALL_THRESHOLD;
-        
-        // Critical: Both walls present in narrow corridor
-        if (hasLeftWall && hasRightWall) {
-            digitalWrite(LEDL, HIGH); 
-            digitalWrite(LEDR, HIGH);
-            
-            // Enhanced dual-wall PID for tight spaces
-            wallError = -(int)proxR + (int)proxL;
-            
-            // Aggressive correction for narrow corridors
-            float narrowKp = 1.2; // Higher response for tight spaces
-            float narrowKi = 0.015; // Moderate integral
-            float narrowKd = 10.0; // Strong damping
-            
+        bool hasLeftWall = proxL < LEFT_WALL_THRESHOLD;
+        bool hasRightWall = proxR < RIGHT_WALL_THRESHOLD;
+
+        if (hasLeftWall && hasRightWall) 
+        {
+            float narrowKp = 2.0; 
+            float narrowKi = 0.03;
+            float narrowKd = 10.0;
+
+            // CORRECTED: Fixed sign inversion for dual wall tracking
+            wallError = (int)proxR - (int)proxL;
             wallInt += wallError;
-            wallInt = constrain(wallInt, -15, 15); // Tighter integral limits
-            
+            wallInt = constrain(wallInt, -15, 15);
+
             float wallDeriv = wallError - wallPrev;
             wallPrev = wallError;
-            
+
             wallPIDValue = narrowKp * wallError + narrowKi * wallInt + narrowKd * wallDeriv;
-            
-        } else if (hasRightWall) {
-            digitalWrite(LEDL, LOW); 
-            digitalWrite(LEDR, HIGH);
+        } 
+        else if (hasRightWall) 
+        {
+            // CORRECTED: Fixed right single wall inversion
             wallError = (float)proxR - RIGHT_WALL_TARGET;
             wallInt += wallError; 
+            wallInt = constrain(wallInt, -15, 15);
             float wallDeriv = wallError - wallPrev; 
             wallPrev = wallError;
-            wallPIDValue = 1.8 * wallError + 0.025 * wallInt + 15.0 * wallDeriv;
-            
-        } else if (hasLeftWall) {
-            digitalWrite(LEDL, HIGH); 
-            digitalWrite(LEDR, LOW);
+            wallPIDValue = 2.1 * wallError + 0.02 * wallInt + 13.0 * wallDeriv;
+        } 
+        else if (hasLeftWall) 
+        {
+            // CORRECTED: Fixed left single wall inversion
             wallError = LEFT_WALL_TARGET - (float)proxL;
             wallInt += wallError; 
+            wallInt = constrain(wallInt, -15, 15);
             float wallDeriv = wallError - wallPrev; 
             wallPrev = wallError;
-            wallPIDValue = 1.8 * wallError + 0.025 * wallInt + 15.0 * wallDeriv;
-        } else {
-            digitalWrite(LEDL, LOW); 
-            digitalWrite(LEDR, LOW);
+            wallPIDValue = 2.1 * wallError + 0.02 * wallInt + 13.0 * wallDeriv;
         }
-        
-        encoderPID();
-        
-        // --- ADJUSTED CONTROL WEIGHTS FOR NARROW SPACES ---
-        const float encoderWeight = 0.25; // Reduced encoder influence
-        const float wallWeight = 0.75; // Increased wall priority
+        else 
+        {
+            wallInt = 0;
+            wallPrev = 0;
+        }
+
+        if (encoderWeight > 0.0) {
+            encoderPID();
+        } else {
+            encoderPIDValue = 0;
+        }
+
         float totalCorrection = (encoderWeight * encoderPIDValue) + (wallWeight * wallPIDValue);
-        
-        // Tighter correction limits for narrow corridors
-        totalCorrection = constrain(totalCorrection, -40, 40);
-        
+        totalCorrection = constrain(totalCorrection, -32, 32);
+
         int leftSpeed = constrain(currentSpeed + totalCorrection, -255, 255);
         int rightSpeed = constrain(currentSpeed - totalCorrection, -255, 255);
         setMotorSpeeds(leftSpeed, rightSpeed);
     }
-    
+
     stopMotors();
-    delay(5); // Slightly longer settling time
+    delay(7); 
 }
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void moveForwardOneCellFast() 
 {
@@ -898,8 +994,8 @@ void moveForwardOneCellFast()
         if (frontVal < 8) break; // Slightly longer stop for higher speed
 
         wallPIDValue = 0;
-        bool hasLeftWall = proxL > LEFT_WALL_THRESHOLD;
-        bool hasRightWall = proxR > RIGHT_WALL_THRESHOLD;
+        bool hasLeftWall = proxL < LEFT_WALL_THRESHOLD;
+        bool hasRightWall = proxR < RIGHT_WALL_THRESHOLD;
 
         // --- Adaptive Dual Wall PID (fast mode) ---
         if (hasLeftWall && hasRightWall) 
@@ -936,10 +1032,7 @@ void moveForwardOneCellFast()
 
         encoderPID();
 
-        // --- Adjusted Correction Weights ---
-        const float encoderWeight = 0.27;
-        const float wallWeight = 0.73;
-        float totalCorrection = (encoderWeight * encoderPIDValue) + (wallWeight * wallPIDValue);
+        float totalCorrection = (encoderWeight_F * encoderPIDValue) + (wallWeight_F * wallPIDValue);
 
         // Tighter correction limits to avoid oscillations
         totalCorrection = constrain(totalCorrection, -32, 32);
@@ -952,6 +1045,9 @@ void moveForwardOneCellFast()
     stopMotors();
     delay(7); // Slightly longer settling for high speed
 }
+
+//!                                                            Turn 
+//! ====================================================================================================================================
 
 void turn(float degrees, int speed) {
     float distance_per_wheel = (abs(degrees) / 360.0) * (PI * WHEEL_SEPARATION_CM);
@@ -970,6 +1066,8 @@ void turn(float degrees, int speed) {
     
     stopMotors();
 }
+//!                                                        Execute move to 
+//! ====================================================================================================================================
 
 void executeMoveTo(int nx, int ny) {
     Heading targetHeading = robotHeading;
@@ -999,6 +1097,8 @@ void executeMoveTo(int nx, int ny) {
     visited[robotY][robotX] = true;
 }
 
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
 void executeMoveToFast(int nx, int ny) {
     Heading targetHeading = robotHeading;
     if (nx > robotX) targetHeading = EAST;
@@ -1027,16 +1127,18 @@ void executeMoveToFast(int nx, int ny) {
     robotY = ny;
 }
 
-// =================================================================
-// ================= ALGORITHM & UTILITY FUNCTIONS =================
-// =================================================================
+//!                                                      Flood FIll functions
+//! ====================================================================================================================================
 
 //? void IRAM_ATTR isrLeftEncoder() { encoderCountLeft++; }
 //? void IRAM_ATTR isrRightEncoder() { encoderCountRight++; }
 
-bool inBounds(int x, int y) { 
+bool inBounds(int x, int y) 
+{ 
     return x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE; 
 }
+
+//*-------------------------------------------------------------------------------------------------------------------------------------
 
 void computeFloodfill(int gx, int gy) {
     for (int y = 0; y < GRID_SIZE; y++)
@@ -1077,7 +1179,10 @@ void computeFloodfill(int gx, int gy) {
     }
 }
 
-bool nextCellTowardsGoal(int &nx, int &ny) {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+bool nextCellTowardsGoal(int &nx, int &ny) 
+{
     int cx = robotX;
     int cy = robotY;
     int currentDist = distMap[cy][cx];
@@ -1118,7 +1223,10 @@ bool nextCellTowardsGoal(int &nx, int &ny) {
     return false; // No valid path forward was found
 }
 
-void pathReturnToStart() {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+void pathReturnToStart() 
+{
     Serial.println("Pathfinding to Start...");
     
     while (!(robotX == START_X && robotY == START_Y)) {
@@ -1174,7 +1282,10 @@ void pathReturnToStart() {
     currentState = AWAITING_FAST_RUN;
 }
 
-void runExploration() {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+void runExploration() 
+{
     senseWallsAtCurrentCell();
     computeFloodfill(goalCells[0].x, goalCells[0].y);
     
@@ -1214,7 +1325,10 @@ void runExploration() {
     }
 }
 
-void performFastRun() {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+void performFastRun() 
+{
     robotX = START_X;
     robotY = START_Y;
     robotHeading = START_HEADING;
@@ -1236,7 +1350,10 @@ void performFastRun() {
     Serial.println("Fast run complete!");
 }
 
-bool nextCellTowardsGoalFinal(int &nx, int &ny) {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+bool nextCellTowardsGoalFinal(int &nx, int &ny) 
+{
     int cx = robotX;
     int cy = robotY;
     int currentDist = distMap[cy][cx];
@@ -1275,7 +1392,10 @@ bool nextCellTowardsGoalFinal(int &nx, int &ny) {
     return false; // No valid, visited path forward was found
 }
 
-void computeFloodfillVisited(int gx, int gy) {
+//*-------------------------------------------------------------------------------------------------------------------------------------
+
+void computeFloodfillVisited(int gx, int gy) 
+{
     // Reset the distance map
     for (int y = 0; y < GRID_SIZE; y++) {
         for (int x = 0; x < GRID_SIZE; x++) {
